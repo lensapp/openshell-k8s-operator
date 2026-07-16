@@ -1,0 +1,7 @@
+/target
+Cargo.lock.orig
+*.swp
+.DS_Store
+
+# Internal working design notes — not published.
+PLAN.md

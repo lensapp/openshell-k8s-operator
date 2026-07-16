@@ -1,0 +1,3 @@
+# Proper nouns that appear in prose doc comments and should not trip
+# clippy::doc_markdown. ".." extends clippy's built-in identifier list.
+doc-valid-idents = ["OpenShell", "GitOps", ".."]

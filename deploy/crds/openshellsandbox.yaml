@@ -1,0 +1,90 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: openshellsandboxes.openshell.lenshq.io
+spec:
+  group: openshell.lenshq.io
+  names:
+    categories: []
+    kind: OpenShellSandbox
+    plural: openshellsandboxes
+    shortNames:
+    - oss
+    singular: openshellsandbox
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.sandboxId
+      name: Sandbox
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for OpenShellSandboxSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Desired state for a single OpenShell sandbox.
+
+              Milestone 1 wires the fields the SDK's curated `SandboxSpec` supports. `policyRef` is accepted and stored now but not yet applied (milestone 3); gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
+            properties:
+              environment:
+                additionalProperties:
+                  type: string
+                description: Environment variables injected into the sandbox runtime.
+                type: object
+              gpu:
+                default: false
+                description: Request a GPU for the sandbox.
+                type: boolean
+              image:
+                description: Container image the sandbox runs. Empty defers to the gateway default.
+                nullable: true
+                type: string
+              policyRef:
+                description: Name of a `Policy` to apply. Reserved for milestone 3 — stored, not yet wired.
+                nullable: true
+                type: string
+              providers:
+                description: Provider names to attach. Each must already exist on the gateway.
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            description: Observed state mirrored from the gateway.
+            nullable: true
+            properties:
+              observedGeneration:
+                description: '`.metadata.generation` last reconciled, for GitOps health checks.'
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                description: Coarse lifecycle phase.
+                enum:
+                - Provisioning
+                - Ready
+                - Error
+                - Deleting
+                nullable: true
+                type: string
+              sandboxId:
+                description: Gateway-assigned sandbox identifier, once created.
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: OpenShellSandbox
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
