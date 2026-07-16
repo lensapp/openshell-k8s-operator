@@ -1,61 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Mirantis, Inc. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-[package]
-name = "openshell-operator"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.90"
-license = "Apache-2.0"
-description = "Kubernetes operator providing declarative CRDs over the OpenShell gateway"
-repository = "https://github.com/lenshq/openshell-k8s-operator"
-
-[[bin]]
-name = "openshell-operator"
-path = "src/main.rs"
-
-[[bin]]
-name = "crdgen"
-path = "src/bin/crdgen.rs"
-
-[lib]
-name = "openshell_operator"
-path = "src/lib.rs"
-
-[dependencies]
-kube = { version = "0.99.0", features = ["runtime", "derive", "client"] }
-# `schemars` lets the embedded `PersistentVolumeClaimSpec` derive JsonSchema so
-# it can be inlined into the OpenShellSandbox CRD (see src/crd.rs volumes).
-k8s-openapi = { version = "0.24.0", features = ["latest", "schemars"] }
-schemars = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-# `Time` for status condition timestamps (metav1.Condition.lastTransitionTime).
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
-futures = "0.3"
-async-trait = "0.1"
-tonic = "0.14"
-# `google.protobuf.Struct` builder for the sandbox template's driver_config;
-# same crate/version the pinned SDK's generated protos use.
-prost-types = "0.14"
-thiserror = "2"
-anyhow = "1"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# OpenShell gateway client + shared types, reused as pinned git deps.
-# Pinned to an exact rev on origin/main; bump deliberately (see PLAN.md drift job).
-openshell-sdk = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
-openshell-core = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
-# Canonical policy schema parser/validator; the single source of truth for
-# translating policy documents into the proto `SandboxPolicy`.
-openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
+[workspace]
+resolver = "3"
+members = ["crates/operator"]
 
 # Mirror OpenShell's workspace lints (STYLEGUIDE.md); we're a separate repo and
-# cannot inherit its [workspace.lints], so replicate them here.
-[lints.rust]
+# cannot inherit its [workspace.lints], so replicate them here. Member crates
+# opt in with `[lints] workspace = true`.
+[workspace.lints.rust]
 unsafe_code = "warn"
 rust_2018_idioms = { level = "warn", priority = -1 }
 trivial_casts = "warn"
@@ -63,7 +16,7 @@ trivial_numeric_casts = "warn"
 unused_lifetimes = "warn"
 unused_qualifications = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
