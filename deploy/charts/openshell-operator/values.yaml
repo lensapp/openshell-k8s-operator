@@ -1,0 +1,69 @@
+# Default values for openshell-operator.
+
+image:
+  repository: ghcr.io/lenshq/openshell-operator
+  # Defaults to the chart's appVersion when left empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Custom Resource Definitions. Installed and upgraded with the release. Set to
+# false when CRDs are managed out of band (e.g. applied cluster-wide by an
+# admin, or shared with another release).
+crds:
+  install: true
+
+operator:
+  # Run the operator as its own Deployment. Leave true for a standalone install.
+  # Set false to co-locate the operator as a sidecar in the gateway's pod (the
+  # hardened loopback posture) — this chart then installs only the CRDs and
+  # RBAC, and the operator container is added by the gateway's chart.
+  deployStandalone: true
+
+gateway:
+  # OpenShell gateway control-plane endpoint. Required for a standalone
+  # Deployment (there is no address the chart could guess) — point it at a
+  # gateway Service, e.g. http://openshell-gateway.openshell-system:8080. In the
+  # co-located posture (operator.deployStandalone=false) the operator uses its
+  # own loopback default, so this is unused.
+  endpoint: ""
+
+# Log filter passed to the operator via RUST_LOG (tracing EnvFilter syntax).
+logLevel: info
+
+serviceAccount:
+  create: true
+  # Generated from the release name when left empty.
+  name: ""
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Pod-level security context. Distroless already runs as nonroot; these harden
+# further and satisfy restricted Pod Security Standards.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context. The operator writes nothing to disk (it logs to
+# stdout), so the root filesystem is read-only.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,57 @@
+{{- if .Values.operator.deployStandalone -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+spec:
+  # Single replica: the operator has no leader election yet, so more than one
+  # would double-run every reconcile loop.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "openshell-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openshell-operator.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "openshell-operator.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: operator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: OPENSHELL_GATEWAY_ENDPOINT
+              value: {{ required "gateway.endpoint is required for a standalone deploy; set it, or set operator.deployStandalone=false to co-locate the operator in the gateway pod" .Values.gateway.endpoint | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

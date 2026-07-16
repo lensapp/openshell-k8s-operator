@@ -1,0 +1,37 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+rules:
+  # The custom resources this operator reconciles.
+  - apiGroups: ["openshell.lenshq.io"]
+    resources: ["openshellsandboxes", "openshellproviders", "openshellpolicies"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["openshell.lenshq.io"]
+    resources:
+      - "openshellsandboxes/status"
+      - "openshellproviders/status"
+      - "openshellpolicies/status"
+    verbs: ["get", "update", "patch"]
+  # Only the sandbox and provider reconcilers use finalizers; policy owns no
+  # gateway state.
+  - apiGroups: ["openshell.lenshq.io"]
+    resources:
+      - "openshellsandboxes/finalizers"
+      - "openshellproviders/finalizers"
+    verbs: ["update"]
+  # Provider credentials are read from Secrets, which are watched for rotation.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  # Sandbox volumes are provisioned as PersistentVolumeClaims: get_opt (get) +
+  # create on reconcile, delete_collection (deletecollection) on cleanup.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "create", "deletecollection"]
+  # Reconcile outcomes are surfaced as Events (kube-rs publishes events.k8s.io/v1).
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]

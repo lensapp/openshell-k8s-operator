@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.90"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+      - name: CRD manifest is up to date
+        run: |
+          cargo run --bin crdgen > deploy/charts/openshell-operator/files/crds.yaml
+          git diff --exit-code -- deploy/charts/openshell-operator/files/crds.yaml
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint deploy/charts/openshell-operator
+      # Render both postures: standalone (needs an endpoint) and CRDs+RBAC-only.
+      - run: helm template test deploy/charts/openshell-operator --set gateway.endpoint=http://gw:8080
+      - run: helm template test deploy/charts/openshell-operator --set operator.deployStandalone=false
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false

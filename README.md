@@ -233,6 +233,25 @@ just works:
 The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in
 `.status.phase` (a separate axis from `Ready`, much like `Pod.status.phase`).
 
+## Install
+
+Install the CRDs, RBAC, and operator with the bundled Helm chart:
+
+```bash
+helm install openshell-operator deploy/charts/openshell-operator \
+  --namespace openshell-system --create-namespace
+```
+
+By default the operator runs as a standalone Deployment pointing at a gateway on
+loopback (`gateway.endpoint`, default `http://127.0.0.1:8080`). For the hardened
+co-located posture — operator as a sidecar in the gateway's pod — set
+`operator.deployStandalone=false` so the chart installs only the CRDs and RBAC,
+then add the operator container to the gateway's pod, bound to the created
+ServiceAccount.
+
+Key values: `image.repository` / `image.tag`, `gateway.endpoint`, `logLevel`,
+`crds.install`, `operator.deployStandalone`, `resources`.
+
 ## Architecture
 
 The operator and gateway run in the **same pod**. The gateway binds to loopback,
@@ -250,7 +269,7 @@ cargo clippy --all-targets   # pedantic + nursery; keep it clean
 cargo fmt --check
 
 # Regenerate the CRD manifests from the Rust types
-cargo run --bin crdgen > deploy/crds/crds.yaml
+cargo run --bin crdgen > deploy/charts/openshell-operator/files/crds.yaml
 
 # Run against the current kubecontext. Expects a gateway at
 # $OPENSHELL_GATEWAY_ENDPOINT (default http://127.0.0.1:8080).

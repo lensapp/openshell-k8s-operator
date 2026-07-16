@@ -24,7 +24,7 @@ cargo build
 cargo test
 cargo clippy --all-targets   # pedantic + nursery; must be clean
 cargo fmt --check
-cargo run --bin crdgen > deploy/crds/crds.yaml   # regenerate CRD manifests
+cargo run --bin crdgen > deploy/charts/openshell-operator/files/crds.yaml   # regenerate CRD manifests
 ```
 
 ## Conventions

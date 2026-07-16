@@ -1,0 +1,14 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} installed as release {{ .Release.Name }}.
+
+CRDs installed: {{ .Values.crds.install }}
+{{- if .Values.operator.deployStandalone }}
+Operator Deployment: {{ include "openshell-operator.fullname" . }} (namespace {{ .Release.Namespace }})
+Gateway endpoint:    {{ .Values.gateway.endpoint }}
+
+Check it came up:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "openshell-operator.fullname" . }}
+{{- else }}
+Standalone Deployment disabled: this release installed only the CRDs and RBAC.
+Add the operator container to the gateway's pod (loopback posture) and bind it
+to the ServiceAccount {{ include "openshell-operator.serviceAccountName" . }}.
+{{- end }}
