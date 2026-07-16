@@ -242,23 +242,26 @@ helm install openshell-operator deploy/charts/openshell-operator \
   --namespace openshell-system --create-namespace
 ```
 
-By default the operator runs as a standalone Deployment pointing at a gateway on
-loopback (`gateway.endpoint`, default `http://127.0.0.1:8080`). For the hardened
-co-located posture — operator as a sidecar in the gateway's pod — set
-`operator.deployStandalone=false` so the chart installs only the CRDs and RBAC,
-then add the operator container to the gateway's pod, bound to the created
-ServiceAccount.
+By default the operator runs as a standalone Deployment; set `gateway.endpoint`
+to your gateway's address. Setting `operator.deployStandalone=false` installs
+only the CRDs and RBAC (for embedding the operator container elsewhere).
 
 Key values: `image.repository` / `image.tag`, `gateway.endpoint`, `logLevel`,
 `crds.install`, `operator.deployStandalone`, `resources`.
 
+> **In progress:** operator→gateway authentication (an OIDC bearer via a bundled
+> issuer — see [`docs/operator-auth.md`](docs/operator-auth.md)) is the next
+> milestone. Until it lands the operator connects without credentials, so it only
+> works against a gateway reachable without auth.
+
 ## Architecture
 
-The operator and gateway run in the **same pod**. The gateway binds to loopback,
-so the operator reaches the control plane over `127.0.0.1` with no auth, while an
-Envoy proxy exposes **only** the sandbox data-plane methods to sandbox pods. This
-keeps the control plane private to the operator without an external identity
-provider.
+The operator authenticates to the gateway as an OIDC `User` (admin) with a bearer
+token minted by a small static OIDC issuer bundled in the chart — no external
+identity provider. The gateway keeps its normal posture: it enforces per-method
+authorization itself (fail-closed), so sandboxes, which present gateway-minted
+JWTs, are confined to the data plane without any additional proxy. See
+[`docs/operator-auth.md`](docs/operator-auth.md) for the full design.
 
 ## Development
 
