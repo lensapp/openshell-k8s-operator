@@ -81,3 +81,75 @@ pub enum Phase {
     /// Sandbox is being torn down.
     Deleting,
 }
+
+/// Desired state for an OpenShell credential provider.
+///
+/// Credential values are never stored on this resource — they live in a Secret
+/// referenced by [`ProviderSpec::credentials_secret_ref`] and are resolved at
+/// reconcile time.
+#[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[kube(
+    group = "openshell.lenshq.io",
+    version = "v1alpha1",
+    kind = "Provider",
+    namespaced,
+    status = "ProviderStatus",
+    shortname = "osp",
+    printcolumn = r#"{"name":"Type","type":"string","jsonPath":".spec.type"}"#,
+    printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSpec {
+    /// Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable —
+    /// enforced by the validating webhook (milestone 4).
+    #[serde(rename = "type")]
+    pub provider_type: String,
+
+    /// Secret (in this Provider's namespace) holding credential values.
+    pub credentials_secret_ref: SecretRef,
+
+    /// Non-secret provider configuration passed through to the gateway.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config: BTreeMap<String, String>,
+}
+
+/// Reference to a Secret providing credential values.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretRef {
+    /// Name of the Secret. Always resolved in the referencing resource's own
+    /// namespace — there is no cross-namespace reference.
+    pub name: String,
+
+    /// Subset of Secret keys to use as credentials. Empty uses every key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+}
+
+/// Observed state mirrored from the gateway for a `Provider`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStatus {
+    /// Coarse lifecycle phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<ProviderPhase>,
+
+    /// `.metadata.generation` last reconciled, for GitOps health checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+
+    /// Hash of the last successfully synced credentials + config. Surfaces
+    /// Secret rotation and lets operators see when a resync last changed state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_hash: Option<String>,
+}
+
+/// Coarse provider lifecycle phase surfaced in `.status.phase`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub enum ProviderPhase {
+    /// Credentials resolved and synced to the gateway.
+    Ready,
+    /// Secret missing, not entitled, or the gateway rejected the sync.
+    Error,
+}

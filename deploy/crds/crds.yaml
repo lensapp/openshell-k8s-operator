@@ -1,0 +1,183 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: openshellsandboxes.openshell.lenshq.io
+spec:
+  group: openshell.lenshq.io
+  names:
+    categories: []
+    kind: OpenShellSandbox
+    plural: openshellsandboxes
+    shortNames:
+    - oss
+    singular: openshellsandbox
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.sandboxId
+      name: Sandbox
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for OpenShellSandboxSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Desired state for a single OpenShell sandbox.
+
+              Milestone 1 wires the fields the SDK's curated `SandboxSpec` supports. `policyRef` is accepted and stored now but not yet applied (milestone 3); gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
+            properties:
+              environment:
+                additionalProperties:
+                  type: string
+                description: Environment variables injected into the sandbox runtime.
+                type: object
+              gpu:
+                default: false
+                description: Request a GPU for the sandbox.
+                type: boolean
+              image:
+                description: Container image the sandbox runs. Empty defers to the gateway default.
+                nullable: true
+                type: string
+              policyRef:
+                description: Name of a `Policy` to apply. Reserved for milestone 3 — stored, not yet wired.
+                nullable: true
+                type: string
+              providers:
+                description: Provider names to attach. Each must already exist on the gateway.
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            description: Observed state mirrored from the gateway.
+            nullable: true
+            properties:
+              observedGeneration:
+                description: '`.metadata.generation` last reconciled, for GitOps health checks.'
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                description: Coarse lifecycle phase.
+                enum:
+                - Provisioning
+                - Ready
+                - Error
+                - Deleting
+                nullable: true
+                type: string
+              sandboxId:
+                description: Gateway-assigned sandbox identifier, once created.
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: OpenShellSandbox
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: providers.openshell.lenshq.io
+spec:
+  group: openshell.lenshq.io
+  names:
+    categories: []
+    kind: Provider
+    plural: providers
+    shortNames:
+    - osp
+    singular: provider
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for ProviderSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              Desired state for an OpenShell credential provider.
+
+              Credential values are never stored on this resource — they live in a Secret referenced by [`ProviderSpec::credentials_secret_ref`] and are resolved at reconcile time.
+            properties:
+              config:
+                additionalProperties:
+                  type: string
+                description: Non-secret provider configuration passed through to the gateway.
+                type: object
+              credentialsSecretRef:
+                description: Secret (in this Provider's namespace) holding credential values.
+                properties:
+                  keys:
+                    description: Subset of Secret keys to use as credentials. Empty uses every key.
+                    items:
+                      type: string
+                    type: array
+                  name:
+                    description: Name of the Secret. Always resolved in the referencing resource's own namespace — there is no cross-namespace reference.
+                    type: string
+                required:
+                - name
+                type: object
+              type:
+                description: Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable — enforced by the validating webhook (milestone 4).
+                type: string
+            required:
+            - credentialsSecretRef
+            - type
+            type: object
+          status:
+            description: Observed state mirrored from the gateway for a `Provider`.
+            nullable: true
+            properties:
+              observedGeneration:
+                description: '`.metadata.generation` last reconciled, for GitOps health checks.'
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                description: Coarse lifecycle phase.
+                enum:
+                - Ready
+                - Error
+                nullable: true
+                type: string
+              syncedHash:
+                description: Hash of the last successfully synced credentials + config. Surfaces Secret rotation and lets operators see when a resync last changed state.
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: Provider
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

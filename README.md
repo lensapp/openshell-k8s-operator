@@ -4,8 +4,9 @@ Declarative, Kubernetes-native control over
 [OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes — manage them with
 `kubectl apply` instead of talking to the gateway directly.
 
-> **Status:** early development. Milestone 1 implements the `OpenShellSandbox`
-> resource (create / get / delete with finalizer cleanup and status mirroring).
+> **Status:** early development. `OpenShellSandbox` (create / get / delete with
+> finalizer cleanup and status mirroring) and `Provider` (static credentials
+> resolved from a Secret, synced to the gateway) resources are implemented.
 
 ## What it does
 
@@ -33,6 +34,30 @@ $ kubectl get oss
 NAME         PHASE   SANDBOX    AGE
 my-sandbox   Ready   3f2b...    30s
 ```
+
+### Providers
+
+A `Provider` binds a credential set on the gateway. Credential values never live
+on the resource — they are read from a referenced Secret in the same namespace,
+which must opt in with the annotation `openshell.lenshq.io/allow-provider-ref: "true"`.
+The operator watches the Secret, so external rotation (external-secrets, Vault)
+triggers a resync.
+
+```yaml
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: Provider
+metadata:
+  name: anthropic
+spec:
+  type: claude
+  credentialsSecretRef:
+    name: anthropic-credentials   # keys: [] reads all keys
+  config:
+    region: us
+```
+
+`Provider` covers static credentials only. Providers v2 (profiles + gateway-managed
+OAuth2 refresh) is a separate, future resource.
 
 ## Architecture
 

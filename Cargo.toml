@@ -32,6 +32,7 @@ serde_yaml = "0.9"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 futures = "0.3"
 async-trait = "0.1"
+tonic = "0.14"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"

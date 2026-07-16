@@ -10,7 +10,7 @@ use kube::Client;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, prelude::*};
 
-use openshell_operator::controller;
+use openshell_operator::controllers;
 use openshell_operator::gateway::SdkGateway;
 
 /// Gateway endpoint. Defaults to the co-located loopback gateway.
@@ -29,8 +29,8 @@ async fn main() -> anyhow::Result<()> {
     let gateway = Arc::new(SdkGateway::connect(endpoint).await?);
 
     let kube = Client::try_default().await?;
-    info!("starting controller");
-    controller::run(kube, gateway).await?;
+    info!("starting controllers");
+    controllers::run(kube, gateway).await?;
 
     Ok(())
 }

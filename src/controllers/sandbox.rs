@@ -8,11 +8,10 @@
 //! is mirrored back into `.status`.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures::StreamExt;
 use kube::{
-    Api, Client, Resource, ResourceExt,
+    Api, Resource, ResourceExt,
     api::{Patch, PatchParams},
     runtime::{
         Controller,
@@ -25,6 +24,7 @@ use openshell_sdk::{SandboxPhase, SandboxSpec};
 use serde_json::json;
 use tracing::{info, warn};
 
+use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
 use crate::crd::{OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase};
 use crate::error::{Error, Result};
 use crate::gateway::{Gateway, SandboxState};
@@ -32,35 +32,19 @@ use crate::gateway::{Gateway, SandboxState};
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
 pub const FINALIZER: &str = "openshell.lenshq.io/sandbox-cleanup";
 
-/// Requeue interval for a successful reconcile (drift re-check cadence).
-const REQUEUE_INTERVAL: Duration = Duration::from_secs(300);
-/// Requeue interval after a failed reconcile.
-const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(15);
-
-/// Shared reconciler state.
-pub struct Context {
-    /// Kubernetes API client.
-    pub kube: Client,
-    /// OpenShell gateway control-plane client.
-    pub gateway: Arc<dyn Gateway>,
-}
-
-/// Run the controller until the process is stopped.
-pub async fn run(kube: Client, gateway: Arc<dyn Gateway>) -> Result<()> {
-    let sandboxes: Api<OpenShellSandbox> = Api::all(kube.clone());
-    let context = Arc::new(Context { kube, gateway });
+/// Run the sandbox controller until the process is stopped.
+pub async fn run(ctx: Arc<Context>) {
+    let sandboxes: Api<OpenShellSandbox> = Api::all(ctx.kube.clone());
 
     Controller::new(sandboxes, watcher::Config::default())
-        .run(reconcile, error_policy, context)
+        .run(reconcile, error_policy, ctx)
         .for_each(|result| async move {
             match result {
                 Ok((obj, _)) => info!(sandbox = %obj.name, "reconciled"),
-                Err(err) => warn!(error = %err, "reconcile loop error"),
+                Err(err) => warn!(error = %err, "sandbox reconcile loop error"),
             }
         })
         .await;
-
-    Ok(())
 }
 
 async fn reconcile(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Action> {
@@ -90,7 +74,7 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
         sandbox_id: Some(state.id),
         observed_generation: sandbox.meta().generation,
     };
-    patch_status(&ctx.kube, &namespace, &name, &status).await?;
+    patch_status(&ctx, &namespace, &name, &status).await?;
 
     Ok(Action::requeue(REQUEUE_INTERVAL))
 }
@@ -132,15 +116,15 @@ async fn cleanup(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Ac
     Ok(Action::await_change())
 }
 
-/// Merge-patch `.status`. Merge (not apply) keeps milestone 1 free of
-/// field-manager ceremony while remaining idempotent for these fields.
+/// Merge-patch `.status`. Merge (not apply) keeps this free of field-manager
+/// ceremony while remaining idempotent for these fields.
 async fn patch_status(
-    kube: &Client,
+    ctx: &Context,
     namespace: &str,
     name: &str,
     status: &OpenShellSandboxStatus,
 ) -> Result<()> {
-    let api: Api<OpenShellSandbox> = Api::namespaced(kube.clone(), namespace);
+    let api: Api<OpenShellSandbox> = Api::namespaced(ctx.kube.clone(), namespace);
     let patch = json!({ "status": status });
     api.patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))
         .await?;
@@ -160,7 +144,7 @@ fn map_phase(phase: SandboxPhase) -> Phase {
 }
 
 fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>) -> Action {
-    warn!(error = %err, "reconcile failed; requeueing");
+    warn!(error = %err, "sandbox reconcile failed; requeueing");
     Action::requeue(ERROR_REQUEUE_INTERVAL)
 }
 
@@ -169,7 +153,7 @@ mod tests {
     use super::{Phase, build_sandbox_spec, ensure_gateway_sandbox, map_phase};
     use crate::crd::OpenShellSandboxSpec;
     use crate::error::Result;
-    use crate::gateway::{Gateway, SandboxState};
+    use crate::gateway::{Gateway, ProviderInput, SandboxState};
     use openshell_sdk::{SandboxPhase, SandboxSpec};
     use std::sync::Mutex;
 
@@ -208,6 +192,14 @@ mod tests {
         async fn delete_sandbox(&self, name: &str) -> Result<bool> {
             self.deleted.lock().unwrap().push(name.to_owned());
             Ok(true)
+        }
+
+        async fn upsert_provider(&self, _input: ProviderInput) -> Result<()> {
+            unreachable!("sandbox controller does not touch providers")
+        }
+
+        async fn delete_provider(&self, _name: &str) -> Result<bool> {
+            unreachable!("sandbox controller does not touch providers")
         }
     }
 

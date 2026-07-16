@@ -9,8 +9,10 @@ control plane. It is a *thin front-end*: it translates custom resources into
 gateway API calls and mirrors gateway state back into `.status`. It does **not**
 reimplement the gateway.
 
-Status: Milestone 1 — `OpenShellSandbox` create/get/delete reconcile with
-finalizer-based cleanup.
+Status: `OpenShellSandbox` (create/get/delete) and `Provider` (static
+credentials from a Secret, entitlement-checked, synced with a rotation watch)
+reconcilers, each with finalizer-based cleanup. Providers v2 (profiles +
+gateway-managed OAuth2 refresh) is deferred to a separate future CRD.
 
 ## Build / test / lint
 
@@ -34,12 +36,14 @@ cargo run --bin crdgen > deploy/crds/openshellsandbox.yaml   # regenerate CRD
 ## Layout
 
 - `src/crd.rs` — CRD types (pure schema; no gateway dependency).
-- `src/gateway.rs` — `Gateway` trait + `SdkGateway`. The reconciler depends on
-  the trait so the loop is unit-testable and the SDK is a swappable detail.
-- `src/controller.rs` — reconcile loop, finalizer, status mirroring, tests.
+- `src/gateway.rs` — `Gateway` trait + `SdkGateway`. The reconcilers depend on
+  the trait so loops are unit-testable and the SDK is a swappable detail.
+- `src/secret.rs` — Secret resolution + entitlement check (pure helpers tested).
+- `src/controllers/` — `mod.rs` (shared `Context` + `run`), `sandbox.rs`,
+  `provider.rs`. One reconcile loop per resource.
 - `src/error.rs` — operator error type.
 - `src/main.rs` — entrypoint wiring.
-- `src/bin/crdgen.rs` — CRD manifest generator.
+- `src/bin/crdgen.rs` — CRD manifest generator (all kinds).
 
 ## Dependencies
 

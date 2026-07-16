@@ -1,15 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Mirantis, Inc. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Generate the CRD manifest from the Rust types.
+//! Generate the CRD manifests from the Rust types.
 //!
-//! `cargo run --bin crdgen > deploy/crds/openshellsandbox.yaml`
+//! `cargo run --bin crdgen > deploy/crds/crds.yaml`
 
 use kube::CustomResourceExt;
-use openshell_operator::crd::OpenShellSandbox;
+use openshell_operator::crd::{OpenShellSandbox, Provider};
 
 fn main() {
-    let crd = OpenShellSandbox::crd();
-    let yaml = serde_yaml::to_string(&crd).expect("serialize CRD to YAML");
-    print!("{yaml}");
+    for crd in [
+        serde_yaml::to_string(&OpenShellSandbox::crd()).expect("serialize OpenShellSandbox CRD"),
+        serde_yaml::to_string(&Provider::crd()).expect("serialize Provider CRD"),
+    ] {
+        println!("---");
+        print!("{crd}");
+    }
 }
