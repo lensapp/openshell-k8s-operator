@@ -1,0 +1,73 @@
+{{- if and .Values.operator.deployStandalone (eq .Values.auth.mode "bundledOidc") -}}
+# Always-on issuer: serves the discovery doc + public JWKS the gateway fetches,
+# read from the ConfigMap the mint Job published. Holds no private key.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openshell-operator.issuerServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "openshell-operator.issuerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openshell-operator.issuerSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: issuer
+          image: "{{ .Values.auth.issuer.repository }}:{{ .Values.auth.issuer.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.auth.issuer.pullPolicy }}
+          args: ["serve"]
+          env:
+            - name: ISSUER_CONFIG_DIR
+              value: /etc/oidc
+            - name: ISSUER_LISTEN
+              value: 0.0.0.0:8081
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+          ports:
+            - name: http
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /keys
+              port: http
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.auth.issuer.resources | nindent 12 }}
+          volumeMounts:
+            - name: jwks
+              mountPath: /etc/oidc
+              readOnly: true
+      volumes:
+        - name: jwks
+          configMap:
+            name: {{ include "openshell-operator.jwksConfigMapName" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openshell-operator.issuerServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "openshell-operator.issuerSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+{{- end }}

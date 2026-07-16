@@ -18,18 +18,61 @@ crds:
 
 operator:
   # Run the operator as its own Deployment. Leave true for a standalone install.
-  # Set false to co-locate the operator as a sidecar in the gateway's pod (the
-  # hardened loopback posture) — this chart then installs only the CRDs and
-  # RBAC, and the operator container is added by the gateway's chart.
+  # Set false to install only the CRDs and RBAC — for embedding the operator
+  # container in another chart. The bundled issuer is skipped in that case.
   deployStandalone: true
 
 gateway:
   # OpenShell gateway control-plane endpoint. Required for a standalone
-  # Deployment (there is no address the chart could guess) — point it at a
-  # gateway Service, e.g. http://openshell-gateway.openshell-system:8080. In the
-  # co-located posture (operator.deployStandalone=false) the operator uses its
-  # own loopback default, so this is unused.
+  # Deployment (there is no address the chart could guess) — point it at your
+  # gateway Service, e.g. https://openshell-gateway.openshell-system.svc:8080.
   endpoint: ""
+  # Name of a Secret holding the gateway's server-CA bundle under key `ca.crt`,
+  # for a private-CA (https) gateway. Empty uses the system roots.
+  caSecret: ""
+  # Skip TLS certificate verification (development only; do not use in prod).
+  insecureSkipVerify: false
+
+# How the operator authenticates to the gateway.
+auth:
+  # bundledOidc — install a small static OIDC issuer (a one-shot mint Job plus a
+  #   public JWKS serve pod) and authenticate the operator with the minted admin
+  #   bearer. You must configure your gateway to trust this issuer; the install
+  #   notes print the exact issuer/audience/role values.
+  # byo — bring your own bearer: the operator mounts auth.byo.tokenSecret. Leave
+  #   that empty to connect anonymously (only works against a gateway that
+  #   allows unauthenticated access).
+  mode: bundledOidc
+
+  # OIDC parameters. In bundledOidc mode these drive the minted token *and* the
+  # values your gateway must be configured with.
+  oidc:
+    # Public issuer URL the gateway discovers. Empty defaults to the in-cluster
+    # Service DNS of the bundled serve pod (http is accepted by the gateway).
+    issuerUrl: ""
+    audience: openshell-operator
+    adminRole: openshell-admin
+    # Token lifetime. Long-lived by design in v1 (no refresh).
+    tokenTtlDays: 3650
+
+  # Bring-your-own settings (mode: byo).
+  byo:
+    # Name of a Secret with a `token` key holding the gateway bearer. Empty
+    # connects without credentials.
+    tokenSecret: ""
+
+  # The bundled issuer image (mint + serve share one binary).
+  issuer:
+    repository: ghcr.io/lenshq/openshell-issuer
+    tag: ""
+    pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
 
 # Log filter passed to the operator via RUST_LOG (tracing EnvFilter syntax).
 logLevel: info

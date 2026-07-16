@@ -50,3 +50,50 @@ ServiceAccount name to use.
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Name of the Secret holding the operator's gateway bearer. In bundledOidc mode
+the mint Job creates it; in byo mode the user supplies it. Empty means the
+operator connects without credentials.
+*/}}
+{{- define "openshell-operator.tokenSecretName" -}}
+{{- if eq .Values.auth.mode "bundledOidc" -}}
+{{- printf "%s-token" (include "openshell-operator.fullname" .) -}}
+{{- else -}}
+{{- .Values.auth.byo.tokenSecret -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Name of the ConfigMap the issuer publishes the JWKS + discovery doc into.
+*/}}
+{{- define "openshell-operator.jwksConfigMapName" -}}
+{{- printf "%s-oidc-jwks" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Name of the issuer serve Service.
+*/}}
+{{- define "openshell-operator.issuerServiceName" -}}
+{{- printf "%s-issuer" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+
+{{/*
+Public issuer URL the gateway discovers. Defaults to the in-cluster Service DNS
+of the bundled serve pod (http is accepted — no cert needed for the issuer).
+*/}}
+{{- define "openshell-operator.issuerUrl" -}}
+{{- if .Values.auth.oidc.issuerUrl -}}
+{{- .Values.auth.oidc.issuerUrl -}}
+{{- else -}}
+{{- printf "http://%s.%s.svc:8081" (include "openshell-operator.issuerServiceName" .) .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Issuer serve selector labels (distinct component within the release).
+*/}}
+{{- define "openshell-operator.issuerSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "openshell-operator.name" . }}-issuer
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end -}}

@@ -246,13 +246,17 @@ By default the operator runs as a standalone Deployment; set `gateway.endpoint`
 to your gateway's address. Setting `operator.deployStandalone=false` installs
 only the CRDs and RBAC (for embedding the operator container elsewhere).
 
-Key values: `image.repository` / `image.tag`, `gateway.endpoint`, `logLevel`,
-`crds.install`, `operator.deployStandalone`, `resources`.
+The operator authenticates to the gateway with an OIDC bearer. By default
+(`auth.mode=bundledOidc`) the chart installs a small static OIDC issuer that
+mints the operator's admin token and serves its JWKS; the install notes print
+the `issuer`/`audience`/`admin_role` values to configure your gateway with. Set
+`auth.mode=byo` to instead mount your own token Secret (`auth.byo.tokenSecret`),
+or leave it empty to connect anonymously against a gateway that allows it. See
+[`docs/operator-auth.md`](docs/operator-auth.md) for the design.
 
-> **In progress:** operator→gateway authentication (an OIDC bearer via a bundled
-> issuer — see [`docs/operator-auth.md`](docs/operator-auth.md)) is the next
-> milestone. Until it lands the operator connects without credentials, so it only
-> works against a gateway reachable without auth.
+Key values: `image.repository` / `image.tag`, `gateway.endpoint`,
+`gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `logLevel`, `crds.install`,
+`operator.deployStandalone`, `resources`.
 
 ## Architecture
 

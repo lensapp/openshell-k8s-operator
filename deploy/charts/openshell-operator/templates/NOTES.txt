@@ -7,8 +7,31 @@ Gateway endpoint:    {{ .Values.gateway.endpoint }}
 
 Check it came up:
   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "openshell-operator.fullname" . }}
+{{- if eq .Values.auth.mode "bundledOidc" }}
+
+Auth: the bundled OIDC issuer minted the operator's admin bearer. Configure your
+gateway to trust it (the operator authenticates as a User with the admin role):
+
+  oidc.issuer      = {{ include "openshell-operator.issuerUrl" . }}
+  oidc.audience    = {{ .Values.auth.oidc.audience }}
+  oidc.roles_claim = roles
+  authz.admin_role = {{ .Values.auth.oidc.adminRole }}
+
+The issuer serves discovery + JWKS in-cluster at
+{{ include "openshell-operator.issuerUrl" . }}/.well-known/openid-configuration.
+Keep TLS on at the gateway; with OIDC configured it needs no client cert.
+{{- else }}
+
+Auth mode: byo.
+{{- if .Values.auth.byo.tokenSecret }}
+The operator mounts the bearer from Secret {{ .Values.auth.byo.tokenSecret }} (key: token).
+{{- else }}
+No token Secret set — the operator connects without credentials. This only
+works against a gateway that allows unauthenticated access.
+{{- end }}
+{{- end }}
 {{- else }}
 Standalone Deployment disabled: this release installed only the CRDs and RBAC.
-Add the operator container to the gateway's pod (loopback posture) and bind it
-to the ServiceAccount {{ include "openshell-operator.serviceAccountName" . }}.
+Embed the operator container in another pod and bind it to the ServiceAccount
+{{ include "openshell-operator.serviceAccountName" . }}.
 {{- end }}

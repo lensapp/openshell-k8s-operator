@@ -32,16 +32,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - run: helm lint deploy/charts/openshell-operator
-      # Render both postures: standalone (needs an endpoint) and CRDs+RBAC-only.
+      # Render every posture: bundled-issuer standalone, byo auth, and
+      # CRDs+RBAC-only.
       - run: helm template test deploy/charts/openshell-operator --set gateway.endpoint=http://gw:8080
+      - run: helm template test deploy/charts/openshell-operator --set gateway.endpoint=http://gw:8080 --set auth.mode=byo
       - run: helm template test deploy/charts/openshell-operator --set operator.deployStandalone=false
 
   docker:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [operator, issuer]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
+          target: ${{ matrix.target }}
           push: false

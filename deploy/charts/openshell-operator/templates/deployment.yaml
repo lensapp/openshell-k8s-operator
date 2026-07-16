@@ -1,4 +1,5 @@
 {{- if .Values.operator.deployStandalone -}}
+{{- $token := include "openshell-operator.tokenSecretName" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,13 +36,38 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: OPENSHELL_GATEWAY_ENDPOINT
-              value: {{ required "gateway.endpoint is required for a standalone deploy; set it, or set operator.deployStandalone=false to co-locate the operator in the gateway pod" .Values.gateway.endpoint | quote }}
+              value: {{ required "gateway.endpoint is required for a standalone deploy; set it, or set operator.deployStandalone=false to install only the CRDs and RBAC" .Values.gateway.endpoint | quote }}
+            {{- if $token }}
+            - name: OPENSHELL_TOKEN_FILE
+              value: /var/run/openshell/token/token
+            {{- end }}
+            {{- if .Values.gateway.caSecret }}
+            - name: OPENSHELL_CA_FILE
+              value: /var/run/openshell/ca/ca.crt
+            {{- end }}
+            {{- if .Values.gateway.insecureSkipVerify }}
+            - name: OPENSHELL_INSECURE_SKIP_VERIFY
+              value: "true"
+            {{- end }}
             - name: RUST_LOG
               value: {{ .Values.logLevel | quote }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if or $token .Values.gateway.caSecret }}
+          volumeMounts:
+            {{- if $token }}
+            - name: gateway-token
+              mountPath: /var/run/openshell/token
+              readOnly: true
+            {{- end }}
+            {{- if .Values.gateway.caSecret }}
+            - name: gateway-ca
+              mountPath: /var/run/openshell/ca
+              readOnly: true
+            {{- end }}
+          {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -53,5 +79,18 @@ spec:
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or $token .Values.gateway.caSecret }}
+      volumes:
+        {{- if $token }}
+        - name: gateway-token
+          secret:
+            secretName: {{ $token }}
+        {{- end }}
+        {{- if .Values.gateway.caSecret }}
+        - name: gateway-ca
+          secret:
+            secretName: {{ .Values.gateway.caSecret }}
+        {{- end }}
       {{- end }}
 {{- end }}

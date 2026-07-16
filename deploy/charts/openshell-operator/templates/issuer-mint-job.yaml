@@ -1,0 +1,58 @@
+{{- if and .Values.operator.deployStandalone (eq .Values.auth.mode "bundledOidc") -}}
+# One-shot pre-install/upgrade hook: generate the signing key, mint the
+# operator's admin bearer into the token Secret, and publish the public JWKS +
+# discovery doc into a ConfigMap. Idempotent — on upgrade an existing token is
+# left untouched, so the key stays stable and live bearers keep verifying.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}-issuer-mint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "openshell-operator.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "openshell-operator.fullname" . }}-issuer-mint
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: mint
+          image: "{{ .Values.auth.issuer.repository }}:{{ .Values.auth.issuer.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.auth.issuer.pullPolicy }}
+          args: ["mint"]
+          env:
+            - name: ISSUER_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: ISSUER_URL
+              value: {{ include "openshell-operator.issuerUrl" . | quote }}
+            - name: ISSUER_AUDIENCE
+              value: {{ .Values.auth.oidc.audience | quote }}
+            - name: ISSUER_ADMIN_ROLE
+              value: {{ .Values.auth.oidc.adminRole | quote }}
+            - name: ISSUER_TOKEN_SECRET
+              value: {{ include "openshell-operator.tokenSecretName" . | quote }}
+            - name: ISSUER_JWKS_CONFIGMAP
+              value: {{ include "openshell-operator.jwksConfigMapName" . | quote }}
+            - name: ISSUER_TOKEN_TTL_DAYS
+              value: {{ .Values.auth.oidc.tokenTtlDays | quote }}
+            - name: RUST_LOG
+              value: {{ .Values.logLevel | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.auth.issuer.resources | nindent 12 }}
+{{- end }}

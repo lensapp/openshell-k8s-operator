@@ -1,0 +1,57 @@
+{{- if and .Values.operator.deployStandalone (eq .Values.auth.mode "bundledOidc") -}}
+# Hook RBAC for the mint Job: it creates the token Secret + JWKS ConfigMap
+# through the kube API. Scoped to this namespace and to those two verbs only.
+# Weighted below the Job so it exists before the Job runs, and torn down after.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}-issuer-mint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}-issuer-mint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  # mint get_opts then creates the token Secret,
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create"]
+  # and server-side-applies (patch) the JWKS ConfigMap.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}-issuer-mint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "openshell-operator.fullname" . }}-issuer-mint
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "openshell-operator.fullname" . }}-issuer-mint
+    namespace: {{ .Release.Namespace }}
+{{- end }}
