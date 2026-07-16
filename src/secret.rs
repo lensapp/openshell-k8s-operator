@@ -4,7 +4,7 @@
 //! Resolution of provider credentials from Kubernetes Secrets.
 //!
 //! The Secret is always read in the referencing resource's own namespace, so a
-//! `Provider` can never reach another tenant's Secrets. On top of that
+//! `OpenShellProvider` can never reach another tenant's Secrets. On top of that
 //! same-namespace boundary, the Secret must explicitly opt in to being used as
 //! provider credentials via [`ENTITLEMENT_ANNOTATION`] — this is the
 //! entitlement check.

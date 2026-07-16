@@ -8,10 +8,11 @@
 //! them into gateway calls and mirror gateway state back into `.status`.
 //!
 //! See `PLAN.md` for the architecture. Alongside the `OpenShellSandbox` loop,
-//! the operator reconciles `Provider` (credentials resolved from a Secret,
+//! the operator reconciles `OpenShellProvider` (credentials resolved from a Secret,
 //! entitlement-checked, synced to the gateway with a rotation watch) and
-//! `Policy` (a reusable policy document validated by the gateway parser and
-//! applied to a sandbox at creation via `spec.policyRef`).
+//! `OpenShellPolicy` (a reusable policy document validated by the gateway parser and
+//! applied to a sandbox at creation via `spec.policyRef`, or inlined under
+//! `spec.policy`).
 
 pub mod controllers;
 pub mod crd;
@@ -21,8 +22,9 @@ pub mod policy;
 pub mod secret;
 
 pub use crd::{
-    FilesystemPolicy, LandlockPolicy, OpenShellSandbox, OpenShellSandboxSpec,
-    OpenShellSandboxStatus, Phase, Policy, PolicySpec, PolicyStatus, ProcessPolicy, Provider,
-    ProviderPhase, ProviderSpec, ProviderStatus, SecretRef,
+    FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,
+    OpenShellProvider, OpenShellProviderPhase, OpenShellProviderSpec, OpenShellProviderStatus,
+    OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy,
+    SecretRef,
 };
 pub use error::{Error, Result};

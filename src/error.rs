@@ -72,7 +72,7 @@ pub enum Error {
         key: String,
     },
 
-    /// A sandbox references a `Policy` that does not exist.
+    /// A sandbox references an `OpenShellPolicy` that does not exist.
     #[error("policy {namespace}/{name} not found")]
     PolicyNotFound {
         /// Namespace searched.
@@ -81,10 +81,15 @@ pub enum Error {
         name: String,
     },
 
-    /// A `Policy` document failed to parse or validate against the gateway
+    /// An `OpenShellPolicy` document failed to parse or validate against the gateway
     /// schema. The message is the parser's diagnostic.
     #[error("invalid policy: {0}")]
     PolicyInvalid(String),
+
+    /// A sandbox set both `spec.policy` and `spec.policyRef`; they are mutually
+    /// exclusive.
+    #[error("specify at most one of spec.policy or spec.policyRef, not both")]
+    PolicySourceConflict,
 
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]

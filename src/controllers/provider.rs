@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Mirantis, Inc. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Reconciliation loop for [`Provider`].
+//! Reconciliation loop for [`OpenShellProvider`].
 //!
 //! Resolves credentials from the referenced Secret (entitlement-checked),
 //! syncs them to the gateway's provider API, and mirrors state to `.status`.
@@ -29,7 +29,7 @@ use kube::{
 use tracing::{info, warn};
 
 use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
-use crate::crd::{Provider, ProviderPhase, ProviderStatus};
+use crate::crd::{OpenShellProvider, OpenShellProviderPhase, OpenShellProviderStatus};
 use crate::error::{Error, Result};
 use crate::gateway::{Gateway, ProviderInput};
 use crate::secret;
@@ -39,11 +39,11 @@ pub const FINALIZER: &str = "openshell.lenshq.io/provider-cleanup";
 
 /// Run the provider controller until the process is stopped.
 ///
-/// Watches referenced Secrets: when a Secret changes, every `Provider` in the
+/// Watches referenced Secrets: when a Secret changes, every `OpenShellProvider` in the
 /// same namespace that references it is re-queued, so credential rotation
 /// propagates to the gateway without polling.
 pub async fn run(ctx: Arc<Context>) {
-    let providers: Api<Provider> = Api::all(ctx.kube.clone());
+    let providers: Api<OpenShellProvider> = Api::all(ctx.kube.clone());
     let secrets: Api<Secret> = Api::all(ctx.kube.clone());
 
     let controller = Controller::new(providers, watcher::Config::default());
@@ -72,9 +72,9 @@ pub async fn run(ctx: Arc<Context>) {
         .await;
 }
 
-async fn reconcile(provider: Arc<Provider>, ctx: Arc<Context>) -> Result<Action> {
+async fn reconcile(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Action> {
     let namespace = provider.namespace().ok_or(Error::MissingNamespace)?;
-    let api: Api<Provider> = Api::namespaced(ctx.kube.clone(), &namespace);
+    let api: Api<OpenShellProvider> = Api::namespaced(ctx.kube.clone(), &namespace);
 
     finalizer(&api, FINALIZER, provider, |event| async {
         match event {
@@ -87,15 +87,15 @@ async fn reconcile(provider: Arc<Provider>, ctx: Arc<Context>) -> Result<Action>
 }
 
 /// Resolve credentials, sync them to the gateway, and record the outcome.
-async fn apply(provider: Arc<Provider>, ctx: Arc<Context>) -> Result<Action> {
+async fn apply(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Action> {
     let name = provider.name_any();
     let namespace = provider.namespace().ok_or(Error::MissingNamespace)?;
-    info!(%name, %namespace, "reconciling Provider");
+    info!(%name, %namespace, "reconciling OpenShellProvider");
 
     match sync_provider(&ctx, &provider, &namespace, &name).await {
         Ok(hash) => {
-            let status = ProviderStatus {
-                phase: Some(ProviderPhase::Ready),
+            let status = OpenShellProviderStatus {
+                phase: Some(OpenShellProviderPhase::Ready),
                 observed_generation: provider.meta().generation,
                 synced_hash: Some(hash),
             };
@@ -104,8 +104,8 @@ async fn apply(provider: Arc<Provider>, ctx: Arc<Context>) -> Result<Action> {
         }
         Err(err) => {
             // Record the failure but keep any prior synced hash for visibility.
-            let status = ProviderStatus {
-                phase: Some(ProviderPhase::Error),
+            let status = OpenShellProviderStatus {
+                phase: Some(OpenShellProviderPhase::Error),
                 observed_generation: provider.meta().generation,
                 synced_hash: provider.status.as_ref().and_then(|s| s.synced_hash.clone()),
             };
@@ -122,7 +122,7 @@ async fn apply(provider: Arc<Provider>, ctx: Arc<Context>) -> Result<Action> {
 /// Returns the hash of the synced material.
 async fn sync_provider(
     ctx: &Context,
-    provider: &Provider,
+    provider: &OpenShellProvider,
     namespace: &str,
     name: &str,
 ) -> Result<String> {
@@ -161,7 +161,7 @@ async fn sync_to_gateway(
 }
 
 /// Delete the provider on the gateway before the finalizer releases the CR.
-async fn cleanup(provider: Arc<Provider>, ctx: Arc<Context>) -> Result<Action> {
+async fn cleanup(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Action> {
     let name = provider.name_any();
     info!(%name, "deleting provider on gateway");
     if !ctx.gateway.delete_provider(&name).await? {
@@ -174,9 +174,9 @@ async fn patch_status(
     ctx: &Context,
     namespace: &str,
     name: &str,
-    status: &ProviderStatus,
+    status: &OpenShellProviderStatus,
 ) -> Result<()> {
-    let api: Api<Provider> = Api::namespaced(ctx.kube.clone(), namespace);
+    let api: Api<OpenShellProvider> = Api::namespaced(ctx.kube.clone(), namespace);
     let patch = serde_json::json!({ "status": status });
     api.patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))
         .await?;
@@ -185,7 +185,7 @@ async fn patch_status(
 
 /// Whether `provider` references `secret_name` in `secret_namespace`.
 fn references_secret(
-    provider: &Provider,
+    provider: &OpenShellProvider,
     secret_namespace: Option<&str>,
     secret_name: &str,
 ) -> bool {
@@ -214,7 +214,7 @@ fn hash_material(
     format!("{:016x}", hasher.finish())
 }
 
-fn error_policy(_provider: Arc<Provider>, err: &Error, _ctx: Arc<Context>) -> Action {
+fn error_policy(_provider: Arc<OpenShellProvider>, err: &Error, _ctx: Arc<Context>) -> Action {
     warn!(error = %err, "provider reconcile failed; requeueing");
     Action::requeue(ERROR_REQUEUE_INTERVAL)
 }
@@ -222,7 +222,7 @@ fn error_policy(_provider: Arc<Provider>, err: &Error, _ctx: Arc<Context>) -> Ac
 #[cfg(test)]
 mod tests {
     use super::{Gateway, hash_material, references_secret, sync_to_gateway};
-    use crate::crd::{Provider, ProviderSpec, SecretRef};
+    use crate::crd::{OpenShellProvider, OpenShellProviderSpec, SecretRef};
     use crate::error::Result;
     use crate::gateway::ProviderInput;
     use std::collections::BTreeMap;
@@ -259,10 +259,10 @@ mod tests {
         }
     }
 
-    fn provider(namespace: &str, secret_name: &str) -> Provider {
-        let mut p = Provider::new(
+    fn provider(namespace: &str, secret_name: &str) -> OpenShellProvider {
+        let mut p = OpenShellProvider::new(
             "prov",
-            ProviderSpec {
+            OpenShellProviderSpec {
                 provider_type: "claude".to_owned(),
                 credentials_secret_ref: SecretRef {
                     name: secret_name.to_owned(),

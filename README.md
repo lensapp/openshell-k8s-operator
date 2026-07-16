@@ -5,8 +5,8 @@ Declarative, Kubernetes-native control over
 `kubectl apply` instead of talking to the gateway directly.
 
 > **Status:** early development. `OpenShellSandbox` (create / get / delete with
-> finalizer cleanup and status mirroring), `Provider` (static credentials
-> resolved from a Secret, synced to the gateway), and `Policy` (a reusable
+> finalizer cleanup and status mirroring), `OpenShellProvider` (static credentials
+> resolved from a Secret, synced to the gateway), and `OpenShellPolicy` (a reusable
 > sandbox policy document applied at sandbox creation) resources are implemented.
 
 ## What it does
@@ -18,8 +18,8 @@ does not reimplement the gateway.
 
 ## Example
 
-A complete, self-contained setup: a credential Secret, a `Provider` that binds
-it on the gateway, a `Policy` that constrains the sandbox, and an
+A complete, self-contained setup: a credential Secret, an `OpenShellProvider` that
+binds it on the gateway, an `OpenShellPolicy` that constrains the sandbox, and an
 `OpenShellSandbox` that pulls both together via `providers` and `policyRef`.
 
 ```yaml
@@ -34,7 +34,7 @@ stringData:
   ANTHROPIC_API_KEY: sk-ant-...
 ---
 apiVersion: openshell.lenshq.io/v1alpha1
-kind: Provider
+kind: OpenShellProvider
 metadata:
   name: anthropic
 spec:
@@ -43,7 +43,7 @@ spec:
     name: anthropic-credentials   # keys: [] reads all keys
 ---
 apiVersion: openshell.lenshq.io/v1alpha1
-kind: Policy
+kind: OpenShellPolicy
 metadata:
   name: restricted
 spec:
@@ -67,8 +67,8 @@ spec:
   environment:
     LOG_LEVEL: debug
   providers:
-    - anthropic       # the Provider above
-  policyRef: restricted   # the Policy above, applied at creation
+    - anthropic       # the OpenShellProvider above
+  policyRef: restricted   # the OpenShellPolicy above, applied at creation
   gpu: false
 ```
 
@@ -91,32 +91,51 @@ The three resource types are covered in detail below.
 
 ### Providers
 
-A `Provider` binds a credential set on the gateway. Credential values never live
-on the resource — they are read from a referenced Secret in the same namespace,
-which must opt in with the annotation `openshell.lenshq.io/allow-provider-ref: "true"`
-(see the `Provider` and Secret in the example above). The operator watches the
-Secret, so external rotation (external-secrets, Vault) triggers a resync.
+An `OpenShellProvider` binds a credential set on the gateway. Credential values
+never live on the resource — they are read from a referenced Secret in the same
+namespace, which must opt in with the annotation
+`openshell.lenshq.io/allow-provider-ref: "true"` (see the `OpenShellProvider` and
+Secret in the example above). The operator watches the Secret, so external
+rotation (external-secrets, Vault) triggers a resync.
 
 `credentialsSecretRef.keys` selects a subset of the Secret's keys (empty reads
 all of them), and `spec.config` passes non-secret settings (e.g. `region`)
 through to the gateway.
 
-`Provider` covers static credentials only. Providers v2 (profiles + gateway-managed
-OAuth2 refresh) is a separate, future resource.
+`OpenShellProvider` covers static credentials only. Providers v2 (profiles +
+gateway-managed OAuth2 refresh) is a separate, future resource.
 
 ### Policies
 
-A `Policy` (see the example above) is a reusable sandbox policy document. An
-`OpenShellSandbox` names one via `spec.policyRef`; the operator resolves it and
-applies it when the sandbox is created. The high-value sections (`filesystem`,
-`landlock`, `process`) are typed; `networkPolicies` is passed through opaquely,
-validated by the gateway's own policy parser rather than mirrored here. The
-`Policy` reconciler validates the document and reports the result in
-`.status.valid` / `.status.message`, so a bad policy surfaces before any sandbox
-uses it.
+An `OpenShellPolicy` (see the example above) is a reusable sandbox policy
+document. An `OpenShellSandbox` names one via `spec.policyRef`; the operator
+resolves it and applies it when the sandbox is created. The high-value sections
+(`filesystem`, `landlock`, `process`) are typed; `networkPolicies` is passed
+through opaquely, validated by the gateway's own policy parser rather than
+mirrored here. The `OpenShellPolicy` reconciler validates the document and
+reports the result in `.status.valid` / `.status.message`, so a bad policy
+surfaces before any sandbox uses it.
 
-Because `filesystem`, `landlock`, and `process` are immutable on a running
-sandbox, editing a `Policy` only affects sandboxes created afterwards.
+For a one-off sandbox you can skip the separate resource and inline the same
+document directly under `spec.policy` instead of `spec.policyRef` (specify at
+most one of the two):
+
+```yaml
+kind: OpenShellSandbox
+spec:
+  policy:
+    filesystem:
+      includeWorkdir: true
+    process:
+      runAsUser: sandbox
+```
+
+The operator applies a policy only when the sandbox is created — it is never
+re-pushed to a running sandbox (and the gateway rejects any change to
+`filesystem`, `landlock`, or `process` on a live sandbox anyway). So editing an
+`OpenShellPolicy` is not retroactive: it affects only sandboxes created
+afterwards. To move an existing sandbox onto new static policy, delete and
+re-create it.
 
 ## Architecture
 

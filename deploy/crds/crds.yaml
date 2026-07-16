@@ -33,7 +33,7 @@ spec:
             description: |-
               Desired state for a single OpenShell sandbox.
 
-              `policyRef` names a `Policy` in the same namespace whose document is applied to the sandbox at creation time. Gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
+              The sandbox's policy is applied at creation time and may be given either inline via `policy` or by reference via `policyRef` (naming an `OpenShellPolicy` in the same namespace) — at most one of the two. Gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
             properties:
               environment:
                 additionalProperties:
@@ -48,8 +48,62 @@ spec:
                 description: Container image the sandbox runs. Empty defers to the gateway default.
                 nullable: true
                 type: string
+              policy:
+                description: Inline policy document applied at create. Mutually exclusive with `policyRef`. Use this for a one-off, self-contained sandbox; use `policyRef` to share a reusable, pre-validated policy across sandboxes.
+                nullable: true
+                properties:
+                  filesystem:
+                    description: Filesystem access policy.
+                    nullable: true
+                    properties:
+                      includeWorkdir:
+                        default: false
+                        description: Mount the sandbox working directory read-write.
+                        type: boolean
+                      readOnly:
+                        description: Absolute paths mounted read-only.
+                        items:
+                          type: string
+                        type: array
+                      readWrite:
+                        description: Absolute paths mounted read-write.
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  landlock:
+                    description: Landlock configuration.
+                    nullable: true
+                    properties:
+                      compatibility:
+                        description: Landlock compatibility mode (e.g. `best_effort`, `enforce`).
+                        type: string
+                    type: object
+                  networkPolicies:
+                    additionalProperties:
+                      x-kubernetes-preserve-unknown-fields: true
+                    description: Network access rules keyed by name (e.g. `claude_code`, `gitlab`). The value schema is the gateway's `NetworkPolicyRule` and is passed through verbatim; see the OpenShell policy documentation for the field set.
+                    type: object
+                  process:
+                    description: Process execution identity.
+                    nullable: true
+                    properties:
+                      runAsGroup:
+                        description: Group the sandbox process runs as (`sandbox` or a numeric GID).
+                        type: string
+                      runAsUser:
+                        description: User the sandbox process runs as (`sandbox` or a numeric UID).
+                        type: string
+                    type: object
+                  version:
+                    default: 1
+                    description: Policy schema version understood by the gateway. Defaults to `1`.
+                    format: uint32
+                    minimum: 0.0
+                    type: integer
+                type: object
               policyRef:
-                description: Name of a `Policy` (same namespace) whose document is applied at create.
+                description: Name of an `OpenShellPolicy` (same namespace) whose document is applied at create. Mutually exclusive with `policy`.
                 nullable: true
                 type: string
               providers:
@@ -93,16 +147,16 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: providers.openshell.lenshq.io
+  name: openshellproviders.openshell.lenshq.io
 spec:
   group: openshell.lenshq.io
   names:
     categories: []
-    kind: Provider
-    plural: providers
+    kind: OpenShellProvider
+    plural: openshellproviders
     shortNames:
     - osp
-    singular: provider
+    singular: openshellprovider
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -118,13 +172,13 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for ProviderSpec via `CustomResource`
+        description: Auto-generated derived type for OpenShellProviderSpec via `CustomResource`
         properties:
           spec:
             description: |-
               Desired state for an OpenShell credential provider.
 
-              Credential values are never stored on this resource — they live in a Secret referenced by [`ProviderSpec::credentials_secret_ref`] and are resolved at reconcile time.
+              Credential values are never stored on this resource — they live in a Secret referenced by [`OpenShellProviderSpec::credentials_secret_ref`] and are resolved at reconcile time.
             properties:
               config:
                 additionalProperties:
@@ -153,7 +207,7 @@ spec:
             - type
             type: object
           status:
-            description: Observed state mirrored from the gateway for a `Provider`.
+            description: Observed state mirrored from the gateway for an `OpenShellProvider`.
             nullable: true
             properties:
               observedGeneration:
@@ -175,7 +229,7 @@ spec:
             type: object
         required:
         - spec
-        title: Provider
+        title: OpenShellProvider
         type: object
     served: true
     storage: true
@@ -185,16 +239,16 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: policies.openshell.lenshq.io
+  name: openshellpolicies.openshell.lenshq.io
 spec:
   group: openshell.lenshq.io
   names:
     categories: []
-    kind: Policy
-    plural: policies
+    kind: OpenShellPolicy
+    plural: openshellpolicies
     shortNames:
     - ospol
-    singular: policy
+    singular: openshellpolicy
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -207,7 +261,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Auto-generated derived type for PolicySpec via `CustomResource`
+        description: Auto-generated derived type for OpenShellPolicySpec via `CustomResource`
         properties:
           spec:
             description: |-
@@ -215,7 +269,7 @@ spec:
 
               The high-value, stable fields (`filesystem`, `landlock`, `process`) are typed. `networkPolicies` is left opaque (preserve-unknown) because the gateway's L7 endpoint schema is large and fast-moving; validation is delegated wholesale to the gateway's own `openshell-policy` parser at reconcile time rather than mirrored (and inevitably drifting) here.
 
-              A `Policy` holds no gateway state and is not synced on its own — it is a document that `OpenShellSandbox.spec.policyRef` resolves and applies at sandbox creation. Note that `filesystem`, `landlock`, and `process` are immutable on a running sandbox, so editing a `Policy` only affects sandboxes created afterwards.
+              An `OpenShellPolicy` holds no gateway state and is not synced on its own — it is a document that `OpenShellSandbox.spec.policyRef` resolves and applies at sandbox creation. Note that `filesystem`, `landlock`, and `process` are immutable on a running sandbox, so editing an `OpenShellPolicy` only affects sandboxes created afterwards.
             properties:
               filesystem:
                 description: Filesystem access policy.
@@ -268,7 +322,7 @@ spec:
                 type: integer
             type: object
           status:
-            description: Observed validation state for a `Policy`.
+            description: Observed validation state for an `OpenShellPolicy`.
             nullable: true
             properties:
               message:
@@ -287,7 +341,7 @@ spec:
             type: object
         required:
         - spec
-        title: Policy
+        title: OpenShellPolicy
         type: object
     served: true
     storage: true

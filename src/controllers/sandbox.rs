@@ -26,7 +26,10 @@ use serde_json::json;
 use tracing::{info, warn};
 
 use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
-use crate::crd::{OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, Policy};
+use crate::crd::{
+    OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
+    OpenShellSandboxStatus, Phase,
+};
 use crate::error::{Error, Result};
 use crate::gateway::SandboxCreate;
 use crate::policy;
@@ -72,7 +75,7 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     // Reuse the gateway sandbox if it already exists (keyed on the CR name);
     // otherwise resolve the policy and create it. Resolving the policy only on
     // the create path keeps re-reconciles of a running sandbox cheap and avoids
-    // spuriously failing it if the referenced Policy is later removed — the
+    // spuriously failing it if the referenced OpenShellPolicy is later removed — the
     // policy is immutable on a running sandbox anyway.
     let state = if let Some(existing) = ctx.gateway.get_sandbox(&name).await? {
         existing
@@ -93,27 +96,56 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     Ok(Action::requeue(REQUEUE_INTERVAL))
 }
 
-/// Resolve `spec.policyRef` (if any) to a validated proto policy. The `Policy`
-/// is fetched from the sandbox's own namespace and converted through the
-/// gateway's parser, so an invalid document fails the sandbox reconcile with a
-/// clear error rather than being silently dropped.
+/// Where a sandbox's policy document comes from, after enforcing that `policy`
+/// and `policyRef` are mutually exclusive.
+enum PolicySource<'a> {
+    /// No policy set; the gateway applies its default.
+    None,
+    /// Inline document under `spec.policy`.
+    Inline(&'a OpenShellPolicySpec),
+    /// Name of an `OpenShellPolicy` to resolve in the sandbox's namespace.
+    Ref(&'a str),
+}
+
+/// Decide the policy source from the spec, rejecting the illegal "both set"
+/// case. Pure and total — the reconcile's only guard until the milestone-4
+/// admission webhook rejects the conflict at write time.
+fn select_policy_source(spec: &OpenShellSandboxSpec) -> Result<PolicySource<'_>> {
+    match (&spec.policy, &spec.policy_ref) {
+        (Some(_), Some(_)) => Err(Error::PolicySourceConflict),
+        (Some(inline), None) => Ok(PolicySource::Inline(inline)),
+        (None, Some(policy_ref)) => Ok(PolicySource::Ref(policy_ref)),
+        (None, None) => Ok(PolicySource::None),
+    }
+}
+
+/// Resolve the sandbox's policy (if any) to a validated proto policy.
+///
+/// The document may be given inline (`spec.policy`) or by reference
+/// (`spec.policyRef`, naming an `OpenShellPolicy` in the sandbox's namespace),
+/// but not both. Either source is run through the gateway's parser, so an
+/// invalid document fails the sandbox reconcile with a clear error rather than
+/// being silently dropped.
 async fn resolve_policy(
     ctx: &Context,
     namespace: &str,
     spec: &OpenShellSandboxSpec,
 ) -> Result<Option<proto::SandboxPolicy>> {
-    let Some(policy_ref) = &spec.policy_ref else {
-        return Ok(None);
-    };
-    let api: Api<Policy> = Api::namespaced(ctx.kube.clone(), namespace);
-    let policy = api
-        .get_opt(policy_ref)
-        .await?
-        .ok_or_else(|| Error::PolicyNotFound {
-            namespace: namespace.to_owned(),
-            name: policy_ref.clone(),
-        })?;
-    Ok(Some(policy::to_proto(&policy.spec)?))
+    match select_policy_source(spec)? {
+        PolicySource::None => Ok(None),
+        PolicySource::Inline(inline) => Ok(Some(policy::to_proto(inline)?)),
+        PolicySource::Ref(policy_ref) => {
+            let api: Api<OpenShellPolicy> = Api::namespaced(ctx.kube.clone(), namespace);
+            let policy = api
+                .get_opt(policy_ref)
+                .await?
+                .ok_or_else(|| Error::PolicyNotFound {
+                    namespace: namespace.to_owned(),
+                    name: policy_ref.to_owned(),
+                })?;
+            Ok(Some(policy::to_proto(&policy.spec)?))
+        }
+    }
 }
 
 /// Translate CR spec fields (plus the resolved policy) into the gateway create.
@@ -176,8 +208,9 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, build_sandbox_create, map_phase};
-    use crate::crd::OpenShellSandboxSpec;
+    use super::{Phase, PolicySource, build_sandbox_create, map_phase, select_policy_source};
+    use crate::crd::{OpenShellPolicySpec, OpenShellSandboxSpec};
+    use crate::error::Error;
     use openshell_sdk::SandboxPhase;
     use openshell_sdk::raw::proto;
 
@@ -211,6 +244,46 @@ mod tests {
         };
         let create = build_sandbox_create("named", &sample_spec(), Some(policy));
         assert_eq!(create.policy.expect("policy present").version, 1);
+    }
+
+    #[test]
+    fn policy_source_rejects_both_inline_and_ref() {
+        let spec = OpenShellSandboxSpec {
+            policy: Some(OpenShellPolicySpec::default()),
+            policy_ref: Some("restricted".to_owned()),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert!(matches!(
+            select_policy_source(&spec),
+            Err(Error::PolicySourceConflict)
+        ));
+    }
+
+    #[test]
+    fn policy_source_picks_inline_ref_or_none() {
+        let inline = OpenShellSandboxSpec {
+            policy: Some(OpenShellPolicySpec::default()),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert!(matches!(
+            select_policy_source(&inline),
+            Ok(PolicySource::Inline(_))
+        ));
+
+        let by_ref = OpenShellSandboxSpec {
+            policy_ref: Some("restricted".to_owned()),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert!(matches!(
+            select_policy_source(&by_ref),
+            Ok(PolicySource::Ref("restricted"))
+        ));
+
+        let none = OpenShellSandboxSpec::default();
+        assert!(matches!(
+            select_policy_source(&none),
+            Ok(PolicySource::None)
+        ));
     }
 
     #[test]

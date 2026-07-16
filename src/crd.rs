@@ -16,9 +16,10 @@ use std::collections::BTreeMap;
 
 /// Desired state for a single OpenShell sandbox.
 ///
-/// `policyRef` names a `Policy` in the same namespace whose document is applied
-/// to the sandbox at creation time. Gateway selection, entrypoint, and
-/// TTL/cleanup arrive in later milestones.
+/// The sandbox's policy is applied at creation time and may be given either
+/// inline via `policy` or by reference via `policyRef` (naming an
+/// `OpenShellPolicy` in the same namespace) — at most one of the two. Gateway
+/// selection, entrypoint, and TTL/cleanup arrive in later milestones.
 #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "openshell.lenshq.io",
@@ -49,7 +50,14 @@ pub struct OpenShellSandboxSpec {
     #[serde(default)]
     pub gpu: bool,
 
-    /// Name of a `Policy` (same namespace) whose document is applied at create.
+    /// Inline policy document applied at create. Mutually exclusive with
+    /// `policyRef`. Use this for a one-off, self-contained sandbox; use
+    /// `policyRef` to share a reusable, pre-validated policy across sandboxes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<OpenShellPolicySpec>,
+
+    /// Name of an `OpenShellPolicy` (same namespace) whose document is applied
+    /// at create. Mutually exclusive with `policy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_ref: Option<String>,
 }
@@ -87,22 +95,22 @@ pub enum Phase {
 /// Desired state for an OpenShell credential provider.
 ///
 /// Credential values are never stored on this resource — they live in a Secret
-/// referenced by [`ProviderSpec::credentials_secret_ref`] and are resolved at
+/// referenced by [`OpenShellProviderSpec::credentials_secret_ref`] and are resolved at
 /// reconcile time.
 #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "openshell.lenshq.io",
     version = "v1alpha1",
-    kind = "Provider",
+    kind = "OpenShellProvider",
     namespaced,
-    status = "ProviderStatus",
+    status = "OpenShellProviderStatus",
     shortname = "osp",
     printcolumn = r#"{"name":"Type","type":"string","jsonPath":".spec.type"}"#,
     printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
 #[serde(rename_all = "camelCase")]
-pub struct ProviderSpec {
+pub struct OpenShellProviderSpec {
     /// Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable —
     /// enforced by the validating webhook (milestone 4).
     #[serde(rename = "type")]
@@ -129,13 +137,13 @@ pub struct SecretRef {
     pub keys: Vec<String>,
 }
 
-/// Observed state mirrored from the gateway for a `Provider`.
+/// Observed state mirrored from the gateway for an `OpenShellProvider`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ProviderStatus {
+pub struct OpenShellProviderStatus {
     /// Coarse lifecycle phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub phase: Option<ProviderPhase>,
+    pub phase: Option<OpenShellProviderPhase>,
 
     /// `.metadata.generation` last reconciled, for GitOps health checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -149,7 +157,7 @@ pub struct ProviderStatus {
 
 /// Coarse provider lifecycle phase surfaced in `.status.phase`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-pub enum ProviderPhase {
+pub enum OpenShellProviderPhase {
     /// Credentials resolved and synced to the gateway.
     Ready,
     /// Secret missing, not entitled, or the gateway rejected the sync.
@@ -164,24 +172,25 @@ pub enum ProviderPhase {
 /// delegated wholesale to the gateway's own `openshell-policy` parser at
 /// reconcile time rather than mirrored (and inevitably drifting) here.
 ///
-/// A `Policy` holds no gateway state and is not synced on its own — it is a
+/// An `OpenShellPolicy` holds no gateway state and is not synced on its own — it is a
 /// document that `OpenShellSandbox.spec.policyRef` resolves and applies at
-/// sandbox creation. Note that `filesystem`, `landlock`, and `process` are
-/// immutable on a running sandbox, so editing a `Policy` only affects
+/// sandbox creation (the same schema can also be inlined directly under
+/// `OpenShellSandbox.spec.policy`). Note that `filesystem`, `landlock`, and
+/// `process` are immutable on a running sandbox, so editing an `OpenShellPolicy` only affects
 /// sandboxes created afterwards.
 #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "openshell.lenshq.io",
     version = "v1alpha1",
-    kind = "Policy",
+    kind = "OpenShellPolicy",
     namespaced,
-    status = "PolicyStatus",
+    status = "OpenShellPolicyStatus",
     shortname = "ospol",
     printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.valid"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
 #[serde(rename_all = "camelCase")]
-pub struct PolicySpec {
+pub struct OpenShellPolicySpec {
     /// Policy schema version understood by the gateway. Defaults to `1`.
     #[serde(default = "default_policy_version")]
     pub version: u32,
@@ -280,10 +289,10 @@ pub struct ProcessPolicy {
     pub run_as_group: String,
 }
 
-/// Observed validation state for a `Policy`.
+/// Observed validation state for an `OpenShellPolicy`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct PolicyStatus {
+pub struct OpenShellPolicyStatus {
     /// Whether the document parsed and validated against the gateway schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub valid: Option<bool>,

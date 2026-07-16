@@ -3,7 +3,7 @@
 
 //! Policy document conversion.
 //!
-//! Translates a [`PolicySpec`] into the gateway's proto `SandboxPolicy` by
+//! Translates an [`OpenShellPolicySpec`] into the gateway's proto `SandboxPolicy` by
 //! rendering the canonical policy document and handing it to
 //! `openshell-policy::parse_sandbox_policy`. That parser is the gateway's own
 //! validation authority, so this module deliberately does **not** reimplement
@@ -12,13 +12,13 @@
 use openshell_sdk::raw::proto;
 use serde_json::{Map, Value, json};
 
-use crate::crd::PolicySpec;
+use crate::crd::OpenShellPolicySpec;
 use crate::error::{Error, Result};
 
-/// Build the proto `SandboxPolicy` for a [`PolicySpec`], validating it through
+/// Build the proto `SandboxPolicy` for an [`OpenShellPolicySpec`], validating it through
 /// the gateway's parser. Returns [`Error::PolicyInvalid`] if the document is
 /// rejected.
-pub fn to_proto(spec: &PolicySpec) -> Result<proto::SandboxPolicy> {
+pub fn to_proto(spec: &OpenShellPolicySpec) -> Result<proto::SandboxPolicy> {
     let document = canonical_document(spec);
     // The parser accepts YAML; JSON is a YAML subset but we serialize via YAML
     // to stay on the documented input path.
@@ -32,10 +32,10 @@ pub fn to_proto(spec: &PolicySpec) -> Result<proto::SandboxPolicy> {
 ///
 /// The keys are deliberately re-spelled to the parser's `snake_case` schema
 /// (`filesystem_policy`, `read_only`, …), which differs from the CRD's
-/// `camelCase` surface — so this cannot be replaced by serializing `PolicySpec`
+/// `camelCase` surface — so this cannot be replaced by serializing `OpenShellPolicySpec`
 /// directly. Typed sections are emitted only when present; `networkPolicies`
 /// values are passed through unmodified.
-fn canonical_document(spec: &PolicySpec) -> Value {
+fn canonical_document(spec: &OpenShellPolicySpec) -> Value {
     let mut doc = Map::new();
     doc.insert("version".to_owned(), json!(spec.version));
 
@@ -77,12 +77,12 @@ fn canonical_document(spec: &PolicySpec) -> Value {
 #[cfg(test)]
 mod tests {
     use super::to_proto;
-    use crate::crd::{FilesystemPolicy, PolicySpec, PreservedValue, ProcessPolicy};
+    use crate::crd::{FilesystemPolicy, OpenShellPolicySpec, PreservedValue, ProcessPolicy};
     use std::collections::BTreeMap;
 
     #[test]
     fn converts_typed_sections_to_proto() {
-        let spec = PolicySpec {
+        let spec = OpenShellPolicySpec {
             version: 1,
             filesystem: Some(FilesystemPolicy {
                 include_workdir: true,
@@ -93,7 +93,7 @@ mod tests {
                 run_as_user: "sandbox".to_owned(),
                 run_as_group: "sandbox".to_owned(),
             }),
-            ..PolicySpec::default()
+            ..OpenShellPolicySpec::default()
         };
 
         let policy = to_proto(&spec).expect("valid policy");
@@ -114,10 +114,10 @@ mod tests {
                 "endpoints": [{ "host": "api.anthropic.com", "port": 443 }],
             })),
         );
-        let spec = PolicySpec {
+        let spec = OpenShellPolicySpec {
             version: 1,
             network_policies: network,
-            ..PolicySpec::default()
+            ..OpenShellPolicySpec::default()
         };
 
         let policy = to_proto(&spec).expect("valid policy");
@@ -133,10 +133,10 @@ mod tests {
             "bad".to_owned(),
             PreservedValue(serde_json::json!({ "nonsense": true })),
         );
-        let spec = PolicySpec {
+        let spec = OpenShellPolicySpec {
             version: 1,
             network_policies: network,
-            ..PolicySpec::default()
+            ..OpenShellPolicySpec::default()
         };
 
         assert!(to_proto(&spec).is_err());
@@ -144,9 +144,9 @@ mod tests {
 
     #[test]
     fn empty_spec_yields_versioned_policy() {
-        let spec = PolicySpec {
+        let spec = OpenShellPolicySpec {
             version: 1,
-            ..PolicySpec::default()
+            ..OpenShellPolicySpec::default()
         };
         let policy = to_proto(&spec).expect("valid policy");
         assert_eq!(policy.version, 1);

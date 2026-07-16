@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Mirantis, Inc. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Reconciliation loop for [`Policy`].
+//! Reconciliation loop for [`OpenShellPolicy`].
 //!
-//! A `Policy` owns no gateway state: it is a reusable document that
+//! An `OpenShellPolicy` owns no gateway state: it is a reusable document that
 //! `OpenShellSandbox.spec.policyRef` applies at sandbox creation. This loop
 //! only validates the document against the gateway's parser and mirrors the
 //! result to `.status`, so authors get fast feedback on a bad policy without
 //! having to create a sandbox. There is no finalizer (nothing to clean up) and
 //! no gateway call.
 //!
-//! A sandbox blocked on a missing or invalid `Policy` recovers on its own: its
-//! reconcile fails and is requeued, so it picks up the `Policy` once fixed —
+//! A sandbox blocked on a missing or invalid `OpenShellPolicy` recovers on its own: its
+//! reconcile fails and is requeued, so it picks up the `OpenShellPolicy` once fixed —
 //! no cross-controller triggering is needed here.
 
 use std::sync::Arc;
@@ -25,13 +25,13 @@ use kube::{
 use tracing::{info, warn};
 
 use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
-use crate::crd::{Policy, PolicyStatus};
+use crate::crd::{OpenShellPolicy, OpenShellPolicyStatus};
 use crate::error::{Error, Result};
 use crate::policy;
 
 /// Run the policy controller until the process is stopped.
 pub async fn run(ctx: Arc<Context>) {
-    let policies: Api<Policy> = Api::all(ctx.kube.clone());
+    let policies: Api<OpenShellPolicy> = Api::all(ctx.kube.clone());
 
     Controller::new(policies, watcher::Config::default())
         .run(reconcile, error_policy, ctx)
@@ -44,24 +44,24 @@ pub async fn run(ctx: Arc<Context>) {
         .await;
 }
 
-async fn reconcile(policy: Arc<Policy>, ctx: Arc<Context>) -> Result<Action> {
+async fn reconcile(policy: Arc<OpenShellPolicy>, ctx: Arc<Context>) -> Result<Action> {
     let name = policy.name_any();
     let namespace = policy.namespace().ok_or(Error::MissingNamespace)?;
-    info!(%name, %namespace, "validating Policy");
+    info!(%name, %namespace, "validating OpenShellPolicy");
 
     // A rejected document is a user error, not a transient failure: record it
     // and requeue normally. Editing the document bumps `.metadata.generation`,
     // which triggers a fresh reconcile — retrying an unchanged bad policy would
     // not help.
     let status = match policy::to_proto(&policy.spec) {
-        Ok(_) => PolicyStatus {
+        Ok(_) => OpenShellPolicyStatus {
             valid: Some(true),
             message: None,
             observed_generation: policy.meta().generation,
         },
         Err(err) => {
             warn!(%name, error = %err, "policy is invalid");
-            PolicyStatus {
+            OpenShellPolicyStatus {
                 valid: Some(false),
                 message: Some(err.to_string()),
                 observed_generation: policy.meta().generation,
@@ -77,16 +77,16 @@ async fn patch_status(
     ctx: &Context,
     namespace: &str,
     name: &str,
-    status: &PolicyStatus,
+    status: &OpenShellPolicyStatus,
 ) -> Result<()> {
-    let api: Api<Policy> = Api::namespaced(ctx.kube.clone(), namespace);
+    let api: Api<OpenShellPolicy> = Api::namespaced(ctx.kube.clone(), namespace);
     let patch = serde_json::json!({ "status": status });
     api.patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))
         .await?;
     Ok(())
 }
 
-fn error_policy(_policy: Arc<Policy>, err: &Error, _ctx: Arc<Context>) -> Action {
+fn error_policy(_policy: Arc<OpenShellPolicy>, err: &Error, _ctx: Arc<Context>) -> Action {
     warn!(error = %err, "policy reconcile failed; requeueing");
     Action::requeue(ERROR_REQUEUE_INTERVAL)
 }
