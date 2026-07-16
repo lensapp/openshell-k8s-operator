@@ -239,7 +239,7 @@ mod tests {
     impl Gateway for FakeGateway {
         async fn create_sandbox(
             &self,
-            _spec: openshell_sdk::SandboxSpec,
+            _create: crate::gateway::SandboxCreate,
         ) -> Result<crate::gateway::SandboxState> {
             unreachable!("provider controller does not touch sandboxes")
         }

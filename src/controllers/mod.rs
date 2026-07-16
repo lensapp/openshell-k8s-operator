@@ -14,6 +14,7 @@ use kube::Client;
 use crate::error::Result;
 use crate::gateway::Gateway;
 
+pub mod policy;
 pub mod provider;
 pub mod sandbox;
 
@@ -33,6 +34,10 @@ pub struct Context {
 /// Run every resource controller concurrently until the process stops.
 pub async fn run(kube: Client, gateway: Arc<dyn Gateway>) -> Result<()> {
     let context = Arc::new(Context { kube, gateway });
-    tokio::join!(sandbox::run(context.clone()), provider::run(context));
+    tokio::join!(
+        sandbox::run(context.clone()),
+        provider::run(context.clone()),
+        policy::run(context),
+    );
     Ok(())
 }

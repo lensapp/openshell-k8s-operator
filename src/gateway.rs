@@ -12,12 +12,13 @@ use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use openshell_sdk::raw::proto::{
-    self, CreateProviderRequest, DeleteProviderRequest, GetProviderRequest, UpdateProviderRequest,
+    self, CreateProviderRequest, CreateSandboxRequest, DeleteProviderRequest, GetProviderRequest,
+    UpdateProviderRequest,
 };
-use openshell_sdk::{ClientConfig, OpenShellClient, SandboxPhase, SandboxSpec, SdkError};
+use openshell_sdk::{ClientConfig, OpenShellClient, SandboxPhase, SdkError};
 use tonic::Code;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Minimal projection of a gateway sandbox the reconciler consumes.
 ///
@@ -30,6 +31,28 @@ pub struct SandboxState {
     pub id: String,
     /// Current lifecycle phase reported by the gateway.
     pub phase: SandboxPhase,
+}
+
+/// Resolved sandbox desired state handed to the gateway.
+///
+/// Deliberately not the SDK's curated `SandboxSpec`: that type has no policy
+/// field, and the full policy (filesystem/landlock/process) must be supplied at
+/// create time because those sections are immutable on a running sandbox.
+#[derive(Clone, Debug, Default)]
+pub struct SandboxCreate {
+    /// Sandbox name (matches the CR name).
+    pub name: String,
+    /// Container image. `None` defers to the gateway default.
+    pub image: Option<String>,
+    /// Environment variables injected into the sandbox runtime.
+    pub environment: BTreeMap<String, String>,
+    /// Provider names to attach.
+    pub providers: Vec<String>,
+    /// Request a GPU.
+    pub gpu: bool,
+    /// Resolved sandbox policy, already validated by the caller. `None` leaves
+    /// the gateway to apply its default policy.
+    pub policy: Option<proto::SandboxPolicy>,
 }
 
 /// Resolved provider desired state handed to the gateway. Credentials are
@@ -49,8 +72,8 @@ pub struct ProviderInput {
 /// The subset of the OpenShell gateway API the reconcilers drive.
 #[async_trait]
 pub trait Gateway: Send + Sync {
-    /// Create a sandbox from the given spec.
-    async fn create_sandbox(&self, spec: SandboxSpec) -> Result<SandboxState>;
+    /// Create a sandbox from the given desired state.
+    async fn create_sandbox(&self, create: SandboxCreate) -> Result<SandboxState>;
 
     /// Fetch a sandbox by name, or `None` if the gateway has no such sandbox.
     async fn get_sandbox(&self, name: &str) -> Result<Option<SandboxState>>;
@@ -85,12 +108,20 @@ impl SdkGateway {
 
 #[async_trait]
 impl Gateway for SdkGateway {
-    async fn create_sandbox(&self, spec: SandboxSpec) -> Result<SandboxState> {
-        let sandbox = self.client.create_sandbox(spec).await?;
-        Ok(SandboxState {
-            id: sandbox.id,
-            phase: sandbox.phase,
-        })
+    async fn create_sandbox(&self, create: SandboxCreate) -> Result<SandboxState> {
+        // The curated `create_sandbox` cannot carry a policy, so build the raw
+        // request. This mirrors the SDK's own request-builder (image into the
+        // template, gpu into resource requirements) and adds the policy.
+        let request = create_sandbox_request(create);
+        let response = self.client.raw_grpc().create_sandbox(request).await?;
+        let sandbox = response.into_inner().sandbox.ok_or_else(|| {
+            Error::Gateway(SdkError::invalid_config(
+                "sandbox missing from gateway response",
+            ))
+        })?;
+        let phase = SandboxPhase::from(sandbox.phase());
+        let id = sandbox.metadata.map(|meta| meta.id).unwrap_or_default();
+        Ok(SandboxState { id, phase })
     }
 
     async fn get_sandbox(&self, name: &str) -> Result<Option<SandboxState>> {
@@ -164,5 +195,41 @@ impl Gateway for SdkGateway {
             })
             .await?;
         Ok(response.into_inner().deleted)
+    }
+}
+
+/// Build the raw `CreateSandboxRequest`. Mirrors the SDK's curated builder
+/// (image into the template, gpu into resource requirements) with the addition
+/// of the policy field the curated surface omits.
+fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
+    let SandboxCreate {
+        name,
+        image,
+        environment,
+        providers,
+        gpu,
+        policy,
+    } = create;
+
+    let template = image.map(|image| proto::SandboxTemplate {
+        image,
+        ..proto::SandboxTemplate::default()
+    });
+    let resource_requirements = gpu.then_some(proto::ResourceRequirements {
+        gpu: Some(proto::GpuResourceRequirements { count: None }),
+    });
+
+    CreateSandboxRequest {
+        spec: Some(proto::SandboxSpec {
+            environment: environment.into_iter().collect(),
+            template,
+            policy,
+            providers,
+            resource_requirements,
+            ..proto::SandboxSpec::default()
+        }),
+        name,
+        labels: HashMap::new(),
+        annotations: HashMap::new(),
     }
 }

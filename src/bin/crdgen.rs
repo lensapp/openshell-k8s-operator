@@ -6,12 +6,13 @@
 //! `cargo run --bin crdgen > deploy/crds/crds.yaml`
 
 use kube::CustomResourceExt;
-use openshell_operator::crd::{OpenShellSandbox, Provider};
+use openshell_operator::crd::{OpenShellSandbox, Policy, Provider};
 
 fn main() {
     for crd in [
         serde_yaml::to_string(&OpenShellSandbox::crd()).expect("serialize OpenShellSandbox CRD"),
         serde_yaml::to_string(&Provider::crd()).expect("serialize Provider CRD"),
+        serde_yaml::to_string(&Policy::crd()).expect("serialize Policy CRD"),
     ] {
         println!("---");
         print!("{crd}");

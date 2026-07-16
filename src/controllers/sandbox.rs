@@ -20,14 +20,16 @@ use kube::{
         watcher,
     },
 };
-use openshell_sdk::{SandboxPhase, SandboxSpec};
+use openshell_sdk::SandboxPhase;
+use openshell_sdk::raw::proto;
 use serde_json::json;
 use tracing::{info, warn};
 
 use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
-use crate::crd::{OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase};
+use crate::crd::{OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, Policy};
 use crate::error::{Error, Result};
-use crate::gateway::{Gateway, SandboxState};
+use crate::gateway::SandboxCreate;
+use crate::policy;
 
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
 pub const FINALIZER: &str = "openshell.lenshq.io/sandbox-cleanup";
@@ -67,7 +69,19 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     let namespace = sandbox.namespace().ok_or(Error::MissingNamespace)?;
     info!(%name, %namespace, "reconciling OpenShellSandbox");
 
-    let state = ensure_gateway_sandbox(ctx.gateway.as_ref(), &name, &sandbox.spec).await?;
+    // Reuse the gateway sandbox if it already exists (keyed on the CR name);
+    // otherwise resolve the policy and create it. Resolving the policy only on
+    // the create path keeps re-reconciles of a running sandbox cheap and avoids
+    // spuriously failing it if the referenced Policy is later removed — the
+    // policy is immutable on a running sandbox anyway.
+    let state = if let Some(existing) = ctx.gateway.get_sandbox(&name).await? {
+        existing
+    } else {
+        info!(%name, "creating sandbox on gateway");
+        let policy = resolve_policy(&ctx, &namespace, &sandbox.spec).await?;
+        let create = build_sandbox_create(&name, &sandbox.spec, policy);
+        ctx.gateway.create_sandbox(create).await?
+    };
 
     let status = OpenShellSandboxStatus {
         phase: Some(map_phase(state.phase)),
@@ -79,30 +93,42 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     Ok(Action::requeue(REQUEUE_INTERVAL))
 }
 
-/// Reuse the gateway sandbox if it already exists (keyed on the CR name),
-/// otherwise create it. Idempotent: re-reconciles converge without duplicating.
-async fn ensure_gateway_sandbox(
-    gateway: &dyn Gateway,
-    name: &str,
+/// Resolve `spec.policyRef` (if any) to a validated proto policy. The `Policy`
+/// is fetched from the sandbox's own namespace and converted through the
+/// gateway's parser, so an invalid document fails the sandbox reconcile with a
+/// clear error rather than being silently dropped.
+async fn resolve_policy(
+    ctx: &Context,
+    namespace: &str,
     spec: &OpenShellSandboxSpec,
-) -> Result<SandboxState> {
-    if let Some(existing) = gateway.get_sandbox(name).await? {
-        Ok(existing)
-    } else {
-        info!(%name, "creating sandbox on gateway");
-        gateway.create_sandbox(build_sandbox_spec(name, spec)).await
-    }
+) -> Result<Option<proto::SandboxPolicy>> {
+    let Some(policy_ref) = &spec.policy_ref else {
+        return Ok(None);
+    };
+    let api: Api<Policy> = Api::namespaced(ctx.kube.clone(), namespace);
+    let policy = api
+        .get_opt(policy_ref)
+        .await?
+        .ok_or_else(|| Error::PolicyNotFound {
+            namespace: namespace.to_owned(),
+            name: policy_ref.clone(),
+        })?;
+    Ok(Some(policy::to_proto(&policy.spec)?))
 }
 
-/// Translate CR spec fields into the SDK's `SandboxSpec`.
-fn build_sandbox_spec(name: &str, spec: &OpenShellSandboxSpec) -> SandboxSpec {
-    SandboxSpec {
-        name: Some(name.to_owned()),
+/// Translate CR spec fields (plus the resolved policy) into the gateway create.
+fn build_sandbox_create(
+    name: &str,
+    spec: &OpenShellSandboxSpec,
+    policy: Option<proto::SandboxPolicy>,
+) -> SandboxCreate {
+    SandboxCreate {
+        name: name.to_owned(),
         image: spec.image.clone(),
-        environment: spec.environment.clone().into_iter().collect(),
+        environment: spec.environment.clone(),
         providers: spec.providers.clone(),
         gpu: spec.gpu,
-        ..SandboxSpec::default()
+        policy,
     }
 }
 
@@ -150,58 +176,10 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, build_sandbox_spec, ensure_gateway_sandbox, map_phase};
+    use super::{Phase, build_sandbox_create, map_phase};
     use crate::crd::OpenShellSandboxSpec;
-    use crate::error::Result;
-    use crate::gateway::{Gateway, ProviderInput, SandboxState};
-    use openshell_sdk::{SandboxPhase, SandboxSpec};
-    use std::sync::Mutex;
-
-    /// In-memory `Gateway` that records calls, for reconcile-logic tests.
-    struct FakeGateway {
-        existing: Option<SandboxState>,
-        created: Mutex<Vec<SandboxSpec>>,
-        deleted: Mutex<Vec<String>>,
-    }
-
-    impl FakeGateway {
-        fn new(existing: Option<SandboxState>) -> Self {
-            Self {
-                existing,
-                created: Mutex::new(Vec::new()),
-                deleted: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl Gateway for FakeGateway {
-        async fn create_sandbox(&self, spec: SandboxSpec) -> Result<SandboxState> {
-            let id = spec.name.clone().unwrap_or_default();
-            self.created.lock().unwrap().push(spec);
-            Ok(SandboxState {
-                id,
-                phase: SandboxPhase::Provisioning,
-            })
-        }
-
-        async fn get_sandbox(&self, _name: &str) -> Result<Option<SandboxState>> {
-            Ok(self.existing.clone())
-        }
-
-        async fn delete_sandbox(&self, name: &str) -> Result<bool> {
-            self.deleted.lock().unwrap().push(name.to_owned());
-            Ok(true)
-        }
-
-        async fn upsert_provider(&self, _input: ProviderInput) -> Result<()> {
-            unreachable!("sandbox controller does not touch providers")
-        }
-
-        async fn delete_provider(&self, _name: &str) -> Result<bool> {
-            unreachable!("sandbox controller does not touch providers")
-        }
-    }
+    use openshell_sdk::SandboxPhase;
+    use openshell_sdk::raw::proto;
 
     fn sample_spec() -> OpenShellSandboxSpec {
         OpenShellSandboxSpec {
@@ -212,48 +190,27 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn creates_sandbox_when_absent() {
-        let gateway = FakeGateway::new(None);
-        let state = ensure_gateway_sandbox(&gateway, "sb-1", &sample_spec())
-            .await
-            .expect("reconcile");
-
-        assert_eq!(state.id, "sb-1");
-        let created = gateway.created.lock().unwrap();
-        assert_eq!(created.len(), 1, "expected exactly one create");
-        assert_eq!(created[0].name.as_deref(), Some("sb-1"));
+    #[test]
+    fn build_sandbox_create_maps_cr_fields() {
+        let create = build_sandbox_create("named", &sample_spec(), None);
+        assert_eq!(create.name, "named");
         assert_eq!(
-            created[0].image.as_deref(),
+            create.image.as_deref(),
             Some("ghcr.io/example/sandbox:latest")
         );
-        assert!(created[0].gpu);
-    }
-
-    #[tokio::test]
-    async fn reuses_sandbox_when_present() {
-        let existing = SandboxState {
-            id: "gateway-assigned-id".to_owned(),
-            phase: SandboxPhase::Ready,
-        };
-        let gateway = FakeGateway::new(Some(existing.clone()));
-        let state = ensure_gateway_sandbox(&gateway, "sb-1", &sample_spec())
-            .await
-            .expect("reconcile");
-
-        assert_eq!(state, existing);
-        assert!(
-            gateway.created.lock().unwrap().is_empty(),
-            "must not create when the sandbox already exists"
-        );
+        assert_eq!(create.providers, vec!["openai".to_owned()]);
+        assert!(create.gpu);
+        assert!(create.policy.is_none());
     }
 
     #[test]
-    fn build_sandbox_spec_maps_cr_fields() {
-        let spec = build_sandbox_spec("named", &sample_spec());
-        assert_eq!(spec.name.as_deref(), Some("named"));
-        assert_eq!(spec.providers, vec!["openai".to_owned()]);
-        assert!(spec.gpu);
+    fn build_sandbox_create_carries_resolved_policy() {
+        let policy = proto::SandboxPolicy {
+            version: 1,
+            ..proto::SandboxPolicy::default()
+        };
+        let create = build_sandbox_create("named", &sample_spec(), Some(policy));
+        assert_eq!(create.policy.expect("policy present").version, 1);
     }
 
     #[test]

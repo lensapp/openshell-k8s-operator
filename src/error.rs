@@ -72,6 +72,20 @@ pub enum Error {
         key: String,
     },
 
+    /// A sandbox references a `Policy` that does not exist.
+    #[error("policy {namespace}/{name} not found")]
+    PolicyNotFound {
+        /// Namespace searched.
+        namespace: String,
+        /// Policy name.
+        name: String,
+    },
+
+    /// A `Policy` document failed to parse or validate against the gateway
+    /// schema. The message is the parser's diagnostic.
+    #[error("invalid policy: {0}")]
+    PolicyInvalid(String),
+
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),

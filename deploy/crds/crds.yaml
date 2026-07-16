@@ -33,7 +33,7 @@ spec:
             description: |-
               Desired state for a single OpenShell sandbox.
 
-              Milestone 1 wires the fields the SDK's curated `SandboxSpec` supports. `policyRef` is accepted and stored now but not yet applied (milestone 3); gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
+              `policyRef` names a `Policy` in the same namespace whose document is applied to the sandbox at creation time. Gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
             properties:
               environment:
                 additionalProperties:
@@ -49,7 +49,7 @@ spec:
                 nullable: true
                 type: string
               policyRef:
-                description: Name of a `Policy` to apply. Reserved for milestone 3 — stored, not yet wired.
+                description: Name of a `Policy` (same namespace) whose document is applied at create.
                 nullable: true
                 type: string
               providers:
@@ -176,6 +176,118 @@ spec:
         required:
         - spec
         title: Provider
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policies.openshell.lenshq.io
+spec:
+  group: openshell.lenshq.io
+  names:
+    categories: []
+    kind: Policy
+    plural: policies
+    shortNames:
+    - ospol
+    singular: policy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.valid
+      name: Valid
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for PolicySpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              A reusable sandbox policy document.
+
+              The high-value, stable fields (`filesystem`, `landlock`, `process`) are typed. `networkPolicies` is left opaque (preserve-unknown) because the gateway's L7 endpoint schema is large and fast-moving; validation is delegated wholesale to the gateway's own `openshell-policy` parser at reconcile time rather than mirrored (and inevitably drifting) here.
+
+              A `Policy` holds no gateway state and is not synced on its own — it is a document that `OpenShellSandbox.spec.policyRef` resolves and applies at sandbox creation. Note that `filesystem`, `landlock`, and `process` are immutable on a running sandbox, so editing a `Policy` only affects sandboxes created afterwards.
+            properties:
+              filesystem:
+                description: Filesystem access policy.
+                nullable: true
+                properties:
+                  includeWorkdir:
+                    default: false
+                    description: Mount the sandbox working directory read-write.
+                    type: boolean
+                  readOnly:
+                    description: Absolute paths mounted read-only.
+                    items:
+                      type: string
+                    type: array
+                  readWrite:
+                    description: Absolute paths mounted read-write.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              landlock:
+                description: Landlock configuration.
+                nullable: true
+                properties:
+                  compatibility:
+                    description: Landlock compatibility mode (e.g. `best_effort`, `enforce`).
+                    type: string
+                type: object
+              networkPolicies:
+                additionalProperties:
+                  x-kubernetes-preserve-unknown-fields: true
+                description: Network access rules keyed by name (e.g. `claude_code`, `gitlab`). The value schema is the gateway's `NetworkPolicyRule` and is passed through verbatim; see the OpenShell policy documentation for the field set.
+                type: object
+              process:
+                description: Process execution identity.
+                nullable: true
+                properties:
+                  runAsGroup:
+                    description: Group the sandbox process runs as (`sandbox` or a numeric GID).
+                    type: string
+                  runAsUser:
+                    description: User the sandbox process runs as (`sandbox` or a numeric UID).
+                    type: string
+                type: object
+              version:
+                default: 1
+                description: Policy schema version understood by the gateway. Defaults to `1`.
+                format: uint32
+                minimum: 0.0
+                type: integer
+            type: object
+          status:
+            description: Observed validation state for a `Policy`.
+            nullable: true
+            properties:
+              message:
+                description: Human-readable validation error, when `valid` is `false`.
+                nullable: true
+                type: string
+              observedGeneration:
+                description: '`.metadata.generation` last reconciled, for GitOps health checks.'
+                format: int64
+                nullable: true
+                type: integer
+              valid:
+                description: Whether the document parsed and validated against the gateway schema.
+                nullable: true
+                type: boolean
+            type: object
+        required:
+        - spec
+        title: Policy
         type: object
     served: true
     storage: true

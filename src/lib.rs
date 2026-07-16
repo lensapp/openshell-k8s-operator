@@ -7,18 +7,22 @@
 //! plane. Custom resources describe desired state; the reconcilers translate
 //! them into gateway calls and mirror gateway state back into `.status`.
 //!
-//! See `PLAN.md` for the architecture. Milestone 2 adds the `Provider` resource
-//! (credentials resolved from a Secret, entitlement-checked, synced to the
-//! gateway with a rotation watch) alongside the `OpenShellSandbox` loop.
+//! See `PLAN.md` for the architecture. Alongside the `OpenShellSandbox` loop,
+//! the operator reconciles `Provider` (credentials resolved from a Secret,
+//! entitlement-checked, synced to the gateway with a rotation watch) and
+//! `Policy` (a reusable policy document validated by the gateway parser and
+//! applied to a sandbox at creation via `spec.policyRef`).
 
 pub mod controllers;
 pub mod crd;
 pub mod error;
 pub mod gateway;
+pub mod policy;
 pub mod secret;
 
 pub use crd::{
-    OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, Provider, ProviderPhase,
-    ProviderSpec, ProviderStatus, SecretRef,
+    FilesystemPolicy, LandlockPolicy, OpenShellSandbox, OpenShellSandboxSpec,
+    OpenShellSandboxStatus, Phase, Policy, PolicySpec, PolicyStatus, ProcessPolicy, Provider,
+    ProviderPhase, ProviderSpec, ProviderStatus, SecretRef,
 };
 pub use error::{Error, Result};

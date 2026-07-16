@@ -9,14 +9,16 @@
 
 use kube::CustomResource;
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{Schema, SchemaObject};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Desired state for a single OpenShell sandbox.
 ///
-/// Milestone 1 wires the fields the SDK's curated `SandboxSpec` supports.
-/// `policyRef` is accepted and stored now but not yet applied (milestone 3);
-/// gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
+/// `policyRef` names a `Policy` in the same namespace whose document is applied
+/// to the sandbox at creation time. Gateway selection, entrypoint, and
+/// TTL/cleanup arrive in later milestones.
 #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "openshell.lenshq.io",
@@ -47,7 +49,7 @@ pub struct OpenShellSandboxSpec {
     #[serde(default)]
     pub gpu: bool,
 
-    /// Name of a `Policy` to apply. Reserved for milestone 3 — stored, not yet wired.
+    /// Name of a `Policy` (same namespace) whose document is applied at create.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_ref: Option<String>,
 }
@@ -152,4 +154,145 @@ pub enum ProviderPhase {
     Ready,
     /// Secret missing, not entitled, or the gateway rejected the sync.
     Error,
+}
+
+/// A reusable sandbox policy document.
+///
+/// The high-value, stable fields (`filesystem`, `landlock`, `process`) are
+/// typed. `networkPolicies` is left opaque (preserve-unknown) because the
+/// gateway's L7 endpoint schema is large and fast-moving; validation is
+/// delegated wholesale to the gateway's own `openshell-policy` parser at
+/// reconcile time rather than mirrored (and inevitably drifting) here.
+///
+/// A `Policy` holds no gateway state and is not synced on its own — it is a
+/// document that `OpenShellSandbox.spec.policyRef` resolves and applies at
+/// sandbox creation. Note that `filesystem`, `landlock`, and `process` are
+/// immutable on a running sandbox, so editing a `Policy` only affects
+/// sandboxes created afterwards.
+#[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[kube(
+    group = "openshell.lenshq.io",
+    version = "v1alpha1",
+    kind = "Policy",
+    namespaced,
+    status = "PolicyStatus",
+    shortname = "ospol",
+    printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.valid"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicySpec {
+    /// Policy schema version understood by the gateway. Defaults to `1`.
+    #[serde(default = "default_policy_version")]
+    pub version: u32,
+
+    /// Filesystem access policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem: Option<FilesystemPolicy>,
+
+    /// Landlock configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landlock: Option<LandlockPolicy>,
+
+    /// Process execution identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessPolicy>,
+
+    /// Network access rules keyed by name (e.g. `claude_code`, `gitlab`). The
+    /// value schema is the gateway's `NetworkPolicyRule` and is passed through
+    /// verbatim; see the OpenShell policy documentation for the field set.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub network_policies: BTreeMap<String, PreservedValue>,
+}
+
+/// An arbitrary JSON value whose schema the API server leaves open
+/// (`x-kubernetes-preserve-unknown-fields`).
+///
+/// Used for `networkPolicies` values: the gateway's L7 network-rule schema is
+/// large and evolves independently, so mirroring it in the CRD would only
+/// invite drift. The gateway's parser is the single validation authority.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct PreservedValue(pub serde_json::Value);
+
+impl JsonSchema for PreservedValue {
+    fn schema_name() -> String {
+        "PreservedValue".to_owned()
+    }
+
+    // Inline the schema rather than emit a `$ref`, which CRD generation cannot
+    // resolve.
+    fn is_referenceable() -> bool {
+        false
+    }
+
+    fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
+        let mut schema = SchemaObject::default();
+        schema.extensions.insert(
+            "x-kubernetes-preserve-unknown-fields".to_owned(),
+            true.into(),
+        );
+        Schema::Object(schema)
+    }
+}
+
+/// Default policy schema version.
+const fn default_policy_version() -> u32 {
+    1
+}
+
+/// Filesystem access policy. Mirrors the gateway's `FilesystemPolicy`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FilesystemPolicy {
+    /// Mount the sandbox working directory read-write.
+    #[serde(default)]
+    pub include_workdir: bool,
+
+    /// Absolute paths mounted read-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_only: Vec<String>,
+
+    /// Absolute paths mounted read-write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_write: Vec<String>,
+}
+
+/// Landlock configuration. Mirrors the gateway's `LandlockPolicy`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LandlockPolicy {
+    /// Landlock compatibility mode (e.g. `best_effort`, `enforce`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub compatibility: String,
+}
+
+/// Process execution identity. Mirrors the gateway's `ProcessPolicy`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessPolicy {
+    /// User the sandbox process runs as (`sandbox` or a numeric UID).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_as_user: String,
+
+    /// Group the sandbox process runs as (`sandbox` or a numeric GID).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_as_group: String,
+}
+
+/// Observed validation state for a `Policy`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyStatus {
+    /// Whether the document parsed and validated against the gateway schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid: Option<bool>,
+
+    /// Human-readable validation error, when `valid` is `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+
+    /// `.metadata.generation` last reconciled, for GitOps health checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
 }
