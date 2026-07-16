@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use openshell_sdk::raw::proto::{
     self, AttachSandboxProviderRequest, CreateProviderRequest, CreateSandboxRequest,
     DeleteProviderRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
-    UpdateProviderRequest,
+    UpdateConfigRequest, UpdateProviderRequest,
 };
 use openshell_sdk::{ClientConfig, OpenShellClient, SandboxPhase, SdkError};
 use tonic::Code;
@@ -93,6 +93,14 @@ pub trait Gateway: Send + Sync {
 
     /// Detach a provider from a live sandbox.
     async fn detach_provider(&self, sandbox: &str, provider: &str) -> Result<()>;
+
+    /// Apply a policy to a live sandbox in place (the gateway's `UpdateConfig`).
+    ///
+    /// Only the mutable sections (`networkPolicies`, additive `filesystem`) may
+    /// actually change; a non-additive `filesystem` edit is rejected as
+    /// [`Error::PolicyUpdateRejected`]. `landlock`/`process` never reach this
+    /// path — the reconciler recreates the sandbox for those.
+    async fn update_policy(&self, sandbox: &str, policy: proto::SandboxPolicy) -> Result<()>;
 
     /// Create or update a provider so it matches `input`.
     async fn upsert_provider(&self, input: ProviderInput) -> Result<()>;
@@ -182,6 +190,27 @@ impl Gateway for SdkGateway {
             })
             .await?;
         Ok(())
+    }
+
+    async fn update_policy(&self, sandbox: &str, policy: proto::SandboxPolicy) -> Result<()> {
+        let request = UpdateConfigRequest {
+            name: sandbox.to_owned(),
+            policy: Some(policy),
+            // 0 → apply against the current resource version; the operator is the
+            // sole writer, matching attach/detach above.
+            expected_resource_version: 0,
+            ..UpdateConfigRequest::default()
+        };
+        match self.client.raw_grpc().update_config(request).await {
+            Ok(_) => Ok(()),
+            // The gateway signals a forbidden (non-additive) policy change with
+            // `InvalidArgument`. Surface it as a terminal error so it doesn't
+            // hot-loop; anything else is a transient RPC failure worth retrying.
+            Err(status) if status.code() == Code::InvalidArgument => {
+                Err(Error::PolicyUpdateRejected(status.message().to_owned()))
+            }
+            Err(status) => Err(status.into()),
+        }
     }
 
     async fn upsert_provider(&self, input: ProviderInput) -> Result<()> {

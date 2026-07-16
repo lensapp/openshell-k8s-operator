@@ -264,6 +264,10 @@ spec:
             description: Observed state mirrored from the gateway.
             nullable: true
             properties:
+              appliedPolicyHash:
+                description: Hash of the mutable policy fields (`networkPolicies` + `filesystem`) last applied. A change here is converged in place via the gateway's `UpdateConfig`, without recreating the sandbox.
+                nullable: true
+                type: string
               appliedSpecHash:
                 description: Hash of the immutable spec fields last applied to the gateway sandbox. A change here versus the current spec is immutable drift, which the operator resolves by deleting and recreating the gateway sandbox.
                 nullable: true

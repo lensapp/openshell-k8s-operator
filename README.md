@@ -5,8 +5,10 @@ Declarative, Kubernetes-native control over
 `kubectl apply` instead of talking to the gateway directly.
 
 > **Status:** early development. `OpenShellSandbox` (create / get / delete with
-> finalizer cleanup, operator-provisioned persistent volumes, recreate-on-drift
-> for immutable fields, and standard `Ready` conditions + events),
+> finalizer cleanup, operator-provisioned persistent volumes, in-place
+> convergence of mutable fields — providers and the policy's network/filesystem
+> — recreate-on-drift for immutable fields, and standard `Ready` conditions +
+> events),
 > `OpenShellProvider` (static credentials resolved from a Secret, synced to the
 > gateway), and `OpenShellPolicy` (a reusable sandbox policy document applied at
 > sandbox creation) resources are implemented.
@@ -144,12 +146,15 @@ spec:
       runAsUser: sandbox
 ```
 
-The operator applies a policy only when the sandbox is created — it is never
-re-pushed to a running sandbox (and the gateway rejects any change to
-`filesystem`, `landlock`, or `process` on a live sandbox anyway). So editing an
-`OpenShellPolicy` is not retroactive: it affects only sandboxes created
-afterwards. To move an existing sandbox onto new static policy, delete and
-re-create it.
+Editing a policy — inline or a shared `OpenShellPolicy` — **is** retroactive:
+the operator watches referenced policies and reconverges every sandbox that
+names one. How it converges depends on the section (see
+[Updates and recreation](#updates-and-recreation)): `networkPolicies` and
+additive `filesystem` changes are pushed to the live sandbox in place, while
+`landlock`/`process` changes force a recreate, since the gateway holds those
+immutable. A shared policy that goes missing or invalid never tears down a
+running sandbox — the sandbox keeps its last-applied policy and the failure
+surfaces on its `Ready` condition.
 
 ### Persistent volumes
 
@@ -175,9 +180,10 @@ mounts a filesystem.
 
 ### Updates and recreation
 
-The gateway treats most of a sandbox's spec as immutable on a running sandbox.
-When you edit an **immutable** field — `image`, `environment`, `gpu`, or the
-inline policy's `landlock`/`process` — the operator converges by **deleting and
+The gateway treats much of a sandbox's spec as immutable on a running sandbox.
+When you edit an **immutable** field — `image`, `environment`, `gpu`, the volume
+mounts, or the resolved policy's `landlock`/`process` (from `spec.policy` or a
+referenced `OpenShellPolicy`) — the operator converges by **deleting and
 recreating the gateway sandbox**. It tracks the applied fields as a hash in
 `.status.appliedSpecHash`, so it recreates only on a real change (and adopts a
 pre-existing sandbox without recreating it). During a recreate it emits a
@@ -194,15 +200,18 @@ the recreate and reattach by name — the whole reason for the volumes feature.
 > change, mount a volume at `/sandbox`; otherwise the workspace is rebuilt from
 > the image on recreate.
 
-What does **not** trigger a recreate: `providers`, `networkPolicies`, and
-`filesystem` (all mutable on a live sandbox), and edits to a referenced
-`OpenShellPolicy` (applying a shared policy is deliberately not retroactive —
-only the sandbox's own spec drives recreation). Of these, **`providers` are
-converged in place** — editing `spec.providers` on a running sandbox attaches
-the newly-listed providers and detaches the removed ones, reconciled against
-what the gateway actually reports (so a manual detach is healed too). In-place
-convergence of the policy's mutable fields (`networkPolicies`, additive
-`filesystem`) is the next step.
+The **mutable** fields are converged **in place**, without recreating:
+
+- **`providers`** — editing `spec.providers` on a running sandbox attaches the
+  newly-listed providers and detaches the removed ones, reconciled against what
+  the gateway actually reports (so a manual detach is healed too).
+- **The policy's `networkPolicies` and `filesystem`** — a change is pushed to
+  the live sandbox via the gateway's `UpdateConfig`, tracked by a separate hash
+  in `.status.appliedPolicyHash`, and announced with a `Normal` `PolicyUpdated`
+  event. `filesystem` is **additively** mutable: adding read-only or read-write
+  paths works, but *removing* a path (or flipping `includeWorkdir`) is rejected
+  by the gateway — that failure surfaces on the `Ready` condition as
+  `PolicyUpdateRejected`. To drop a filesystem path, recreate the sandbox.
 
 ## Status and events
 

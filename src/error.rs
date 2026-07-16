@@ -91,6 +91,14 @@ pub enum Error {
     #[error("specify at most one of spec.policy or spec.policyRef, not both")]
     PolicySourceConflict,
 
+    /// The gateway rejected an in-place policy update as invalid — typically a
+    /// non-additive `filesystem` change (dropping a path or flipping
+    /// `includeWorkdir`), which the gateway forbids on a live sandbox. The
+    /// message is the gateway's diagnostic. Terminal: it won't clear until the
+    /// policy is edited, so this must not hot-loop the reconciler.
+    #[error("gateway rejected policy update: {0}")]
+    PolicyUpdateRejected(String),
+
     /// A sandbox volume is malformed (bad name, relative mount path, or an
     /// unsupported `volumeMode`). The message names the offending volume.
     #[error("invalid volume: {0}")]
@@ -126,6 +134,7 @@ impl Error {
             Self::PolicyNotFound { .. } => "PolicyNotFound",
             Self::PolicyInvalid(_) => "PolicyInvalid",
             Self::PolicySourceConflict => "PolicyConflict",
+            Self::PolicyUpdateRejected(_) => "PolicyUpdateRejected",
             Self::VolumeInvalid(_) => "VolumeInvalid",
             Self::RecreateTimeout { .. } => "RecreateTimeout",
             Self::Finalizer(_) => "FinalizerError",
@@ -141,6 +150,9 @@ impl Error {
     /// and requeueing lets the sandbox recover once it does.)
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::PolicySourceConflict | Self::VolumeInvalid(_))
+        matches!(
+            self,
+            Self::PolicySourceConflict | Self::VolumeInvalid(_) | Self::PolicyUpdateRejected(_)
+        )
     }
 }

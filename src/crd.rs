@@ -150,6 +150,12 @@ pub struct OpenShellSandboxStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub applied_spec_hash: Option<String>,
 
+    /// Hash of the mutable policy fields (`networkPolicies` + `filesystem`) last
+    /// applied. A change here is converged in place via the gateway's
+    /// `UpdateConfig`, without recreating the sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_policy_hash: Option<String>,
+
     /// `.metadata.generation` last reconciled, for GitOps health checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,

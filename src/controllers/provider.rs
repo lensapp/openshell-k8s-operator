@@ -284,6 +284,13 @@ mod tests {
         async fn detach_provider(&self, _sandbox: &str, _provider: &str) -> Result<()> {
             unreachable!("provider controller does not touch sandboxes")
         }
+        async fn update_policy(
+            &self,
+            _sandbox: &str,
+            _policy: openshell_sdk::raw::proto::SandboxPolicy,
+        ) -> Result<()> {
+            unreachable!("provider controller does not touch sandboxes")
+        }
         async fn upsert_provider(&self, input: ProviderInput) -> Result<()> {
             self.upserted.lock().unwrap().push(input);
             Ok(())
