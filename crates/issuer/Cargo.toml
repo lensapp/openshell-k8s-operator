@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Mirantis, Inc. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "openshell-issuer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+description = "Static OIDC issuer that mints the operator's gateway bearer and serves its JWKS"
+repository = "https://github.com/lenshq/openshell-k8s-operator"
+
+[[bin]]
+name = "openshell-issuer"
+path = "src/main.rs"
+
+[dependencies]
+# `mint` creates the token Secret + JWKS ConfigMap through the kube API.
+kube = { version = "0.99.0", features = ["client"] }
+k8s-openapi = { version = "0.24.0", features = ["latest"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# RSA keypair generation for the RS256 signing key.
+rsa = { version = "0.9", features = ["pem"] }
+rand = "0.8"
+# RS256 JWT signing (EncodingKey::from_rsa_pem consumes the PKCS#8 PEM).
+jsonwebtoken = "9"
+base64 = "0.22"
+sha2 = "0.10"
+# `serve` exposes the discovery doc + JWKS over HTTP.
+axum = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Lints are defined once at the workspace root (see /Cargo.toml).
+[lints]
+workspace = true

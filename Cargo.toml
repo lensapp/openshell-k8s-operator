@@ -3,7 +3,7 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/operator"]
+members = ["crates/operator", "crates/issuer"]
 
 # Mirror OpenShell's workspace lints (STYLEGUIDE.md); we're a separate repo and
 # cannot inherit its [workspace.lints], so replicate them here. Member crates
