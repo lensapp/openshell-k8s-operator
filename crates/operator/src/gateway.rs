@@ -16,7 +16,7 @@ use openshell_sdk::raw::proto::{
     DeleteProviderRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
     UpdateConfigRequest, UpdateProviderRequest,
 };
-use openshell_sdk::{ClientConfig, OpenShellClient, SandboxPhase, SdkError};
+use openshell_sdk::{AuthConfig, ClientConfig, OpenShellClient, SandboxPhase, SdkError};
 use tonic::Code;
 
 use crate::error::{Error, Result};
@@ -109,20 +109,88 @@ pub trait Gateway: Send + Sync {
     async fn delete_provider(&self, name: &str) -> Result<bool>;
 }
 
+/// Default gateway endpoint when `OPENSHELL_GATEWAY_ENDPOINT` is unset.
+const DEFAULT_GATEWAY_ENDPOINT: &str = "http://127.0.0.1:8080";
+
+/// How the operator reaches and authenticates to the gateway.
+///
+/// The operator authenticates as an OIDC `User` (admin) with a long-lived
+/// bearer minted by the bundled issuer (see `docs/operator-auth.md`). Resolved
+/// from the environment the chart injects; file-backed fields are read once at
+/// startup.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct GatewayConfig {
+    /// Gateway URL, e.g. `https://gateway.openshell-system.svc:8080`.
+    pub endpoint: String,
+    /// Bearer token. `None` connects anonymously (only usable against a gateway
+    /// that allows unauthenticated access).
+    pub token: Option<String>,
+    /// PEM CA bundle for a private-CA gateway. `None` uses the system roots.
+    pub ca_cert: Option<Vec<u8>>,
+    /// Skip TLS verification (development only).
+    pub insecure_skip_verify: bool,
+}
+
+impl GatewayConfig {
+    /// Resolve the connection from the environment, reading the mounted token
+    /// and CA files if their paths are set.
+    ///
+    /// - `OPENSHELL_GATEWAY_ENDPOINT` — gateway URL (default loopback).
+    /// - `OPENSHELL_TOKEN_FILE` — path to the mounted bearer token; unset means
+    ///   connect without credentials.
+    /// - `OPENSHELL_CA_FILE` — path to the gateway's PEM CA bundle.
+    /// - `OPENSHELL_INSECURE_SKIP_VERIFY` — `true` to skip TLS verification.
+    pub fn from_env() -> Result<Self> {
+        let endpoint = std::env::var("OPENSHELL_GATEWAY_ENDPOINT")
+            .unwrap_or_else(|_| DEFAULT_GATEWAY_ENDPOINT.to_string());
+        let token = read_optional_file("OPENSHELL_TOKEN_FILE")?.map(|t| t.trim().to_string());
+        let ca_cert = read_optional_file("OPENSHELL_CA_FILE")?.map(String::into_bytes);
+        let insecure_skip_verify = std::env::var("OPENSHELL_INSECURE_SKIP_VERIFY")
+            .is_ok_and(|v| v.eq_ignore_ascii_case("true"));
+        Ok(Self {
+            endpoint,
+            token,
+            ca_cert,
+            insecure_skip_verify,
+        })
+    }
+}
+
+/// Read the file named by env var `key`, or `None` if the var is unset.
+fn read_optional_file(key: &str) -> Result<Option<String>> {
+    std::env::var(key)
+        .ok()
+        .map(|path| read_file(key, &path))
+        .transpose()
+}
+
+/// Read `path`, tagging any I/O error with the env var it came from.
+fn read_file(key: &str, path: &str) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|source| {
+        Error::Gateway(SdkError::invalid_config(format!(
+            "reading {key} ({path}): {source}"
+        )))
+    })
+}
+
 /// [`Gateway`] backed by the real `openshell-sdk` client.
 pub struct SdkGateway {
     client: OpenShellClient,
 }
 
 impl SdkGateway {
-    /// Connect to the gateway at `endpoint`.
+    /// Connect to the gateway described by `config`.
     ///
-    /// In the co-located deployment topology this is a loopback address and no
-    /// auth is attached — the operator and gateway share a pod (see `PLAN.md`).
-    pub async fn connect(endpoint: impl Into<String>) -> Result<Self> {
-        let mut config = ClientConfig::new(endpoint);
-        config.auth = None;
-        let client = OpenShellClient::connect(config).await?;
+    /// When a token is present it is sent as an OIDC bearer over server-TLS
+    /// (the gateway requires no client cert with OIDC configured); otherwise
+    /// the client connects anonymously.
+    pub async fn connect(config: GatewayConfig) -> Result<Self> {
+        let mut client_config = ClientConfig::new(config.endpoint);
+        client_config.auth = config.token.map(AuthConfig::oidc);
+        client_config.ca_cert = config.ca_cert;
+        client_config.insecure_skip_verify = config.insecure_skip_verify;
+        let client = OpenShellClient::connect(client_config).await?;
         Ok(Self { client })
     }
 }
@@ -366,9 +434,27 @@ fn json_value_to_prost(value: serde_json::Value) -> prost_types::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_sandbox_request, json_value_to_struct};
+    use super::{create_sandbox_request, json_value_to_struct, read_file};
     use crate::gateway::SandboxCreate;
     use serde_json::json;
+
+    #[test]
+    fn read_file_returns_contents_for_trimming() {
+        // A mounted Secret file often carries a trailing newline; `from_env`
+        // trims it, so a token that round-trips through a file still matches.
+        let path = std::env::temp_dir().join("openshell-test-token");
+        std::fs::write(&path, "the-token\n").expect("write temp token");
+        let contents = read_file("OPENSHELL_TOKEN_FILE", path.to_str().unwrap()).expect("read");
+        assert_eq!(contents.trim(), "the-token");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn read_file_errors_on_missing_path() {
+        // "Set but unreadable" is a hard error, distinct from "unset" (None).
+        let err = read_file("OPENSHELL_CA_FILE", "/nonexistent/openshell/ca.crt");
+        assert!(err.is_err());
+    }
 
     #[test]
     fn json_value_to_struct_maps_nested_scalars() {

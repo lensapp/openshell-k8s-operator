@@ -11,10 +11,7 @@ use tracing::info;
 use tracing_subscriber::{EnvFilter, prelude::*};
 
 use openshell_operator::controllers;
-use openshell_operator::gateway::SdkGateway;
-
-/// Gateway endpoint. Defaults to the co-located loopback gateway.
-const DEFAULT_GATEWAY_ENDPOINT: &str = "http://127.0.0.1:8080";
+use openshell_operator::gateway::{GatewayConfig, SdkGateway};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,10 +20,13 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let endpoint = std::env::var("OPENSHELL_GATEWAY_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_GATEWAY_ENDPOINT.to_string());
-    info!(%endpoint, "connecting to OpenShell gateway");
-    let gateway = Arc::new(SdkGateway::connect(endpoint).await?);
+    let config = GatewayConfig::from_env()?;
+    info!(
+        endpoint = %config.endpoint,
+        authenticated = config.token.is_some(),
+        "connecting to OpenShell gateway"
+    );
+    let gateway = Arc::new(SdkGateway::connect(config).await?);
 
     let kube = Client::try_default().await?;
     info!("starting controllers");
