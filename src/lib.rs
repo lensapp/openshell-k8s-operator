@@ -20,11 +20,12 @@ pub mod error;
 pub mod gateway;
 pub mod policy;
 pub mod secret;
+pub mod volumes;
 
 pub use crd::{
     FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,
     OpenShellProvider, OpenShellProviderPhase, OpenShellProviderSpec, OpenShellProviderStatus,
     OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy,
-    SecretRef,
+    SandboxVolume, SecretRef, VolumeRetention,
 };
 pub use error::{Error, Result};

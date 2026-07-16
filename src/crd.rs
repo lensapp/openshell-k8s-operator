@@ -60,6 +60,66 @@ pub struct OpenShellSandboxSpec {
     /// at create. Mutually exclusive with `policy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_ref: Option<String>,
+
+    /// Persistent volumes provisioned and owned by this sandbox. Each entry has
+    /// the operator create a PVC and mount it into the sandbox. Because the PVC
+    /// is anchored to this resource — not the disposable gateway sandbox — its
+    /// data survives the delete+recreate the gateway requires to change an
+    /// otherwise-immutable field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<SandboxVolume>,
+
+    /// What happens to the provisioned `volumes` when this `OpenShellSandbox` is
+    /// deleted. Volumes are always kept across gateway-side recreation; this
+    /// setting only governs deletion of the resource itself.
+    #[serde(default)]
+    pub volume_retention: VolumeRetention,
+}
+
+/// A persistent volume the operator provisions, owns, and mounts into a sandbox.
+///
+/// The operator creates a `PersistentVolumeClaim` named deterministically from
+/// the sandbox and `name`, then wires it into the gateway's Kubernetes driver
+/// config so the sandbox pod mounts it at `mountPath`. Mounting under `/sandbox`
+/// hands OpenShell's workspace persistence to this volume (the gateway then
+/// skips its own ephemeral workspace claim); mount elsewhere (e.g. `/data`) to
+/// add durable storage alongside the image-seeded workspace.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxVolume {
+    /// Volume name, also the stem of the provisioned PVC's name. Must be
+    /// unique within the sandbox and a valid PVC name component (the API
+    /// server rejects a malformed name at PVC creation).
+    pub name: String,
+
+    /// Absolute path the volume is mounted at inside the sandbox container.
+    pub mount_path: String,
+
+    /// Mount only a sub-path within the volume rather than its root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_path: Option<String>,
+
+    /// Mount the volume read-only.
+    #[serde(default)]
+    pub read_only: bool,
+
+    /// The `PersistentVolumeClaim` spec used to provision the volume, embedded
+    /// verbatim from the Kubernetes API — so `resources`, `storageClassName`,
+    /// `accessModes`, and `dataSource` (restore from a snapshot or clone) are
+    /// all available. `volumeMode: Block` is rejected: the sandbox mounts a
+    /// filesystem.
+    pub claim: k8s_openapi::api::core::v1::PersistentVolumeClaimSpec,
+}
+
+/// Fate of a sandbox's provisioned volumes when the `OpenShellSandbox` is deleted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub enum VolumeRetention {
+    /// Keep the PVCs so their data outlives the resource (default). The
+    /// operator never deletes them; cleanup is left to the user.
+    #[default]
+    Retain,
+    /// Delete the provisioned PVCs when the resource is deleted.
+    Delete,
 }
 
 /// Observed state mirrored from the gateway.

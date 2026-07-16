@@ -5,9 +5,10 @@ Declarative, Kubernetes-native control over
 `kubectl apply` instead of talking to the gateway directly.
 
 > **Status:** early development. `OpenShellSandbox` (create / get / delete with
-> finalizer cleanup and status mirroring), `OpenShellProvider` (static credentials
-> resolved from a Secret, synced to the gateway), and `OpenShellPolicy` (a reusable
-> sandbox policy document applied at sandbox creation) resources are implemented.
+> finalizer cleanup, status mirroring, and operator-provisioned persistent
+> volumes), `OpenShellProvider` (static credentials resolved from a Secret, synced
+> to the gateway), and `OpenShellPolicy` (a reusable sandbox policy document
+> applied at sandbox creation) resources are implemented.
 
 ## What it does
 
@@ -70,6 +71,15 @@ spec:
     - anthropic       # the OpenShellProvider above
   policyRef: restricted   # the OpenShellPolicy above, applied at creation
   gpu: false
+  volumes:            # operator-provisioned, persists across recreation
+    - name: work
+      mountPath: /data
+      claim:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+  volumeRetention: Retain   # keep the PVC when the sandbox is deleted (default)
 ```
 
 ```console
@@ -136,6 +146,28 @@ re-pushed to a running sandbox (and the gateway rejects any change to
 `OpenShellPolicy` is not retroactive: it affects only sandboxes created
 afterwards. To move an existing sandbox onto new static policy, delete and
 re-create it.
+
+### Persistent volumes
+
+`spec.volumes` gives a sandbox durable storage. For each entry the operator
+provisions a `PersistentVolumeClaim` (named `<sandbox>-<volume>`) from the
+embedded `claim` — the standard Kubernetes `PersistentVolumeClaimSpec`, so
+`storageClassName`, `accessModes`, `resources`, and `dataSource` (restore from a
+VolumeSnapshot or clone an existing PVC) are all available — and mounts it into
+the sandbox at `mountPath`.
+
+The PVC is owned by the `OpenShellSandbox`, **not** by the gateway sandbox
+underneath it. That is the point: the gateway treats a sandbox's image, policy,
+and other fields as immutable, so changing them means deleting and re-creating
+the sandbox — and because the PVC is anchored to the resource rather than the
+disposable sandbox, its data survives that recreation. Mounting a volume under
+`/sandbox` hands OpenShell's workspace persistence to it; mount elsewhere (e.g.
+`/data`, as above) to keep durable storage alongside the image-seeded workspace.
+
+`volumeRetention` governs what happens to the PVCs when the `OpenShellSandbox`
+itself is deleted: `Retain` (default) keeps them so the data outlives the
+resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox
+mounts a filesystem.
 
 ## Architecture
 

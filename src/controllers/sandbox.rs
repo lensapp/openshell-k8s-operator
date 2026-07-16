@@ -10,9 +10,10 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
+use k8s_openapi::api::core::v1::PersistentVolumeClaim;
 use kube::{
     Api, Resource, ResourceExt,
-    api::{Patch, PatchParams},
+    api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
     runtime::{
         Controller,
         controller::Action,
@@ -28,11 +29,11 @@ use tracing::{info, warn};
 use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
 use crate::crd::{
     OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
-    OpenShellSandboxStatus, Phase,
+    OpenShellSandboxStatus, Phase, VolumeRetention,
 };
 use crate::error::{Error, Result};
 use crate::gateway::SandboxCreate;
-use crate::policy;
+use crate::{policy, volumes};
 
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
 pub const FINALIZER: &str = "openshell.lenshq.io/sandbox-cleanup";
@@ -71,6 +72,11 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     let name = sandbox.name_any();
     let namespace = sandbox.namespace().ok_or(Error::MissingNamespace)?;
     info!(%name, %namespace, "reconciling OpenShellSandbox");
+
+    // Provision the sandbox's volumes first (idempotent), so their PVCs exist
+    // before the gateway schedules the pod that mounts them.
+    volumes::validate(&sandbox.spec.volumes)?;
+    ensure_pvcs(&ctx, &namespace, &name, &sandbox.spec.volumes).await?;
 
     // Reuse the gateway sandbox if it already exists (keyed on the CR name);
     // otherwise resolve the policy and create it. Resolving the policy only on
@@ -161,16 +167,54 @@ fn build_sandbox_create(
         providers: spec.providers.clone(),
         gpu: spec.gpu,
         policy,
+        driver_config: volumes::driver_config_json(name, &spec.volumes),
     }
 }
 
-/// Delete the sandbox on the gateway before the finalizer releases the CR.
+/// Create the PVC for each volume that does not yet exist. Existing PVCs are
+/// left untouched — their spec is largely immutable and their data must be
+/// preserved — so this is a safe get-or-create on every reconcile.
+async fn ensure_pvcs(
+    ctx: &Context,
+    namespace: &str,
+    name: &str,
+    volumes: &[crate::crd::SandboxVolume],
+) -> Result<()> {
+    if volumes.is_empty() {
+        return Ok(());
+    }
+    let api: Api<PersistentVolumeClaim> = Api::namespaced(ctx.kube.clone(), namespace);
+    for volume in volumes {
+        let pvc = volumes::build_pvc(name, volume);
+        let pvc_name = volumes::pvc_name(name, volume);
+        if api.get_opt(&pvc_name).await?.is_none() {
+            info!(%name, %pvc_name, "provisioning sandbox volume");
+            api.create(&PostParams::default(), &pvc).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Delete the sandbox on the gateway before the finalizer releases the CR, and
+/// its provisioned volumes when `volumeRetention` is `Delete`.
 async fn cleanup(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Action> {
     let name = sandbox.name_any();
     info!(%name, "deleting sandbox on gateway");
     if !ctx.gateway.delete_sandbox(&name).await? {
         info!(%name, "sandbox already absent on gateway");
     }
+
+    if sandbox.spec.volume_retention == VolumeRetention::Delete {
+        let namespace = sandbox.namespace().ok_or(Error::MissingNamespace)?;
+        info!(%name, "deleting provisioned sandbox volumes");
+        let api: Api<PersistentVolumeClaim> = Api::namespaced(ctx.kube.clone(), &namespace);
+        api.delete_collection(
+            &DeleteParams::default(),
+            &ListParams::default().labels(&volumes::selector(&name)),
+        )
+        .await?;
+    }
+
     Ok(Action::await_change())
 }
 
@@ -209,8 +253,9 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 #[cfg(test)]
 mod tests {
     use super::{Phase, PolicySource, build_sandbox_create, map_phase, select_policy_source};
-    use crate::crd::{OpenShellPolicySpec, OpenShellSandboxSpec};
+    use crate::crd::{OpenShellPolicySpec, OpenShellSandboxSpec, SandboxVolume};
     use crate::error::Error;
+    use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
     use openshell_sdk::SandboxPhase;
     use openshell_sdk::raw::proto;
 
@@ -234,6 +279,27 @@ mod tests {
         assert_eq!(create.providers, vec!["openai".to_owned()]);
         assert!(create.gpu);
         assert!(create.policy.is_none());
+        assert!(create.driver_config.is_none());
+    }
+
+    #[test]
+    fn build_sandbox_create_carries_volume_driver_config() {
+        let spec = OpenShellSandboxSpec {
+            volumes: vec![SandboxVolume {
+                name: "data".to_owned(),
+                mount_path: "/data".to_owned(),
+                sub_path: None,
+                read_only: false,
+                claim: PersistentVolumeClaimSpec::default(),
+            }],
+            ..OpenShellSandboxSpec::default()
+        };
+        let create = build_sandbox_create("named", &spec, None);
+        let config = create.driver_config.expect("driver_config present");
+        assert_eq!(
+            config["kubernetes"]["volumes"][0]["persistent_volume_claim"]["claim_name"],
+            "named-data"
+        );
     }
 
     #[test]

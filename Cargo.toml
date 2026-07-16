@@ -24,7 +24,9 @@ path = "src/lib.rs"
 
 [dependencies]
 kube = { version = "0.99.0", features = ["runtime", "derive", "client"] }
-k8s-openapi = { version = "0.24.0", features = ["latest"] }
+# `schemars` lets the embedded `PersistentVolumeClaimSpec` derive JsonSchema so
+# it can be inlined into the OpenShellSandbox CRD (see src/crd.rs volumes).
+k8s-openapi = { version = "0.24.0", features = ["latest", "schemars"] }
 schemars = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,6 +35,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 futures = "0.3"
 async-trait = "0.1"
 tonic = "0.14"
+# `google.protobuf.Struct` builder for the sandbox template's driver_config;
+# same crate/version the pinned SDK's generated protos use.
+prost-types = "0.14"
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"

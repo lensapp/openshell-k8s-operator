@@ -53,6 +53,10 @@ pub struct SandboxCreate {
     /// Resolved sandbox policy, already validated by the caller. `None` leaves
     /// the gateway to apply its default policy.
     pub policy: Option<proto::SandboxPolicy>,
+    /// Driver-keyed `driver_config` envelope (e.g. custom volume mounts), or
+    /// `None`. Passed through to the sandbox template verbatim; the gateway
+    /// forwards the block matching the active compute driver.
+    pub driver_config: Option<serde_json::Value>,
 }
 
 /// Resolved provider desired state handed to the gateway. Credentials are
@@ -209,10 +213,15 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
         providers,
         gpu,
         policy,
+        driver_config,
     } = create;
 
-    let template = image.map(|image| proto::SandboxTemplate {
-        image,
+    // A template is needed when either the image or the driver_config is set;
+    // both live on it. An empty image string defers to the gateway default.
+    let driver_config = driver_config.map(json_value_to_struct);
+    let template = (image.is_some() || driver_config.is_some()).then(|| proto::SandboxTemplate {
+        image: image.unwrap_or_default(),
+        driver_config,
         ..proto::SandboxTemplate::default()
     });
     let resource_requirements = gpu.then_some(proto::ResourceRequirements {
@@ -231,5 +240,76 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
         name,
         labels: HashMap::new(),
         annotations: HashMap::new(),
+    }
+}
+
+/// Convert a JSON value into a `google.protobuf.Struct`. `driver_config` is
+/// always a JSON object; a non-object collapses to an empty struct.
+fn json_value_to_struct(value: serde_json::Value) -> prost_types::Struct {
+    let serde_json::Value::Object(map) = value else {
+        return prost_types::Struct::default();
+    };
+    prost_types::Struct {
+        fields: map
+            .into_iter()
+            .map(|(key, value)| (key, json_value_to_prost(value)))
+            .collect(),
+    }
+}
+
+/// Recursively convert a JSON value into a `google.protobuf.Value`.
+fn json_value_to_prost(value: serde_json::Value) -> prost_types::Value {
+    use prost_types::value::Kind;
+
+    let kind = match value {
+        serde_json::Value::Null => Kind::NullValue(0),
+        serde_json::Value::Bool(flag) => Kind::BoolValue(flag),
+        serde_json::Value::Number(num) => Kind::NumberValue(num.as_f64().unwrap_or_default()),
+        serde_json::Value::String(text) => Kind::StringValue(text),
+        serde_json::Value::Array(items) => Kind::ListValue(prost_types::ListValue {
+            values: items.into_iter().map(json_value_to_prost).collect(),
+        }),
+        serde_json::Value::Object(_) => Kind::StructValue(json_value_to_struct(value)),
+    };
+    prost_types::Value { kind: Some(kind) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{create_sandbox_request, json_value_to_struct};
+    use crate::gateway::SandboxCreate;
+    use serde_json::json;
+
+    #[test]
+    fn json_value_to_struct_maps_nested_scalars() {
+        // Numbers use a float literal: `google.protobuf.Struct` stores every
+        // number as an f64, so an integer would round-trip as `N.0`.
+        let value = json!({
+            "kubernetes": {
+                "volumes": [{ "name": "data", "read_only": false }],
+                "ratio": 2.5,
+            }
+        });
+        let converted = json_value_to_struct(value.clone());
+
+        // Round-tripping back through the gateway's own decoder must reproduce
+        // the input, proving the conversion is faithful.
+        let round_tripped = openshell_core::proto_struct::struct_to_json_value(&converted);
+        assert_eq!(round_tripped, value);
+    }
+
+    #[test]
+    fn create_request_carries_driver_config_on_template() {
+        let create = SandboxCreate {
+            name: "box".to_owned(),
+            driver_config: Some(json!({ "kubernetes": { "volumes": [] } })),
+            ..SandboxCreate::default()
+        };
+        let request = create_sandbox_request(create);
+        let template = request
+            .spec
+            .and_then(|spec| spec.template)
+            .expect("template present when driver_config set");
+        assert!(template.driver_config.is_some());
     }
 }

@@ -91,6 +91,11 @@ pub enum Error {
     #[error("specify at most one of spec.policy or spec.policyRef, not both")]
     PolicySourceConflict,
 
+    /// A sandbox volume is malformed (bad name, relative mount path, or an
+    /// unsupported `volumeMode`). The message names the offending volume.
+    #[error("invalid volume: {0}")]
+    VolumeInvalid(String),
+
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),
