@@ -61,23 +61,45 @@ pub async fn run(kube: Client, gateway: Arc<dyn Gateway>) -> Result<()> {
     Ok(())
 }
 
-/// Publish a `Warning` event describing a reconcile failure on `object`.
+/// Publish an event against `object`. Best-effort — a failure to publish is
+/// logged, never propagated, so it can't mask the underlying reconcile outcome.
 ///
-/// Conditions are the durable source of truth; this adds the transient
-/// breadcrumb visible in `kubectl describe`. Best-effort — a failure to publish
-/// is logged, never propagated, so it can't mask the underlying reconcile error.
-async fn record_failure<K>(ctx: &Context, object: &K, action: &str, err: &Error)
-where
+/// Conditions are the durable source of truth; events are the transient
+/// breadcrumb visible in `kubectl describe`.
+async fn record_event<K>(
+    ctx: &Context,
+    object: &K,
+    type_: EventType,
+    reason: &str,
+    action: &str,
+    note: String,
+) where
     K: Resource<DynamicType = ()> + Sync,
 {
     let event = Event {
-        type_: EventType::Warning,
-        reason: err.reason().to_owned(),
-        note: Some(err.to_string()),
+        type_,
+        reason: reason.to_owned(),
+        note: Some(note),
         action: action.to_owned(),
         secondary: None,
     };
     if let Err(publish_err) = ctx.recorder.publish(&event, &object.object_ref(&())).await {
-        warn!(error = %publish_err, "failed to publish failure event");
+        warn!(error = %publish_err, "failed to publish event");
     }
+}
+
+/// Publish a `Warning` event describing a reconcile failure on `object`.
+async fn record_failure<K>(ctx: &Context, object: &K, action: &str, err: &Error)
+where
+    K: Resource<DynamicType = ()> + Sync,
+{
+    record_event(
+        ctx,
+        object,
+        EventType::Warning,
+        err.reason(),
+        action,
+        err.to_string(),
+    )
+    .await;
 }

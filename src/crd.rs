@@ -142,6 +142,12 @@ pub struct OpenShellSandboxStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_id: Option<String>,
 
+    /// Hash of the immutable spec fields last applied to the gateway sandbox.
+    /// A change here versus the current spec is immutable drift, which the
+    /// operator resolves by deleting and recreating the gateway sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_spec_hash: Option<String>,
+
     /// `.metadata.generation` last reconciled, for GitOps health checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,

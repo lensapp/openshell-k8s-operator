@@ -3,11 +3,14 @@
 
 //! Reconciliation loop for [`OpenShellSandbox`].
 //!
-//! Idempotent get-or-create against the gateway keyed on the resource name,
-//! with a finalizer guaranteeing gateway-side cleanup on delete. Gateway state
-//! is mirrored back into `.status`.
+//! Converges the gateway sandbox to the desired spec, keyed on the resource
+//! name: create when absent, reuse when unchanged, and delete+recreate when an
+//! immutable field drifts (operator-owned volumes survive and reattach). A
+//! finalizer guarantees gateway-side cleanup on delete, and gateway state is
+//! mirrored back into `.status`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::PersistentVolumeClaim;
@@ -18,6 +21,7 @@ use kube::{
     runtime::{
         Controller,
         controller::Action,
+        events::EventType,
         finalizer::{Event as Finalizer, finalizer},
         watcher,
     },
@@ -27,7 +31,7 @@ use openshell_sdk::raw::proto;
 use serde_json::json;
 use tracing::{info, warn};
 
-use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_failure};
+use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_event, record_failure};
 use crate::crd::{
     OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
     OpenShellSandboxStatus, Phase, VolumeRetention,
@@ -35,6 +39,14 @@ use crate::crd::{
 use crate::error::{Error, Result};
 use crate::gateway::{SandboxCreate, SandboxState};
 use crate::{conditions, policy, volumes};
+
+/// How long to wait between polls for the old gateway sandbox to disappear
+/// during a recreate, and how many times to poll before giving up this
+/// reconcile (and requeueing). The product (~60s) is the worst-case time a
+/// recreate blocks its reconcile worker — acceptable because recreate is a rare
+/// event; see [`recreate`].
+const RECREATE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const RECREATE_POLL_ATTEMPTS: usize = 30;
 
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
 pub const FINALIZER: &str = "openshell.lenshq.io/sandbox-cleanup";
@@ -82,8 +94,9 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     let now = Time(chrono::Utc::now());
     let prior = sandbox.status.clone().unwrap_or_default();
     let mut current = prior.conditions.clone();
+    let desired_hash = immutable_fingerprint(&sandbox.spec);
 
-    match converge(&ctx, &namespace, &name, &sandbox).await {
+    match converge(&ctx, &namespace, &name, &sandbox, &desired_hash).await {
         Ok(state) => {
             conditions::set(
                 &mut current,
@@ -100,6 +113,7 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
                 conditions: current,
                 phase: Some(map_phase(state.phase)),
                 sandbox_id: Some(state.id),
+                applied_spec_hash: Some(desired_hash),
                 observed_generation: generation,
             };
             patch_status(&ctx, &namespace, &name, &status).await?;
@@ -118,11 +132,12 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
                     now,
                 ),
             );
-            // Keep any prior gateway phase / id for visibility.
+            // Keep any prior gateway phase / id / applied hash for visibility.
             let status = OpenShellSandboxStatus {
                 conditions: current,
                 phase: prior.phase,
                 sandbox_id: prior.sandbox_id,
+                applied_spec_hash: prior.applied_spec_hash,
                 observed_generation: generation,
             };
             if let Err(patch_err) = patch_status(&ctx, &namespace, &name, &status).await {
@@ -133,31 +148,133 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
     }
 }
 
-/// Provision volumes and create-or-get the gateway sandbox, returning its state.
+/// Provision volumes, then create / reuse / recreate the gateway sandbox.
 ///
 /// Volumes are provisioned first (idempotent) so their PVCs exist before the
-/// gateway schedules the pod that mounts them. The gateway sandbox is reused if
-/// it already exists (keyed on the CR name); otherwise the policy is resolved
-/// and it is created. Resolving the policy only on the create path keeps
-/// re-reconciles of a running sandbox cheap and avoids spuriously failing it if
-/// the referenced `OpenShellPolicy` is later removed — the policy is immutable
-/// on a running sandbox anyway.
+/// gateway schedules the pod that mounts them. Then:
+/// - no gateway sandbox yet → create it;
+/// - one exists and its applied immutable-spec hash matches → reuse as-is;
+/// - one exists but an *immutable* field drifted (image, env, gpu, inline
+///   landlock/process, volume mounts) → delete and recreate it, since the
+///   gateway forbids changing those on a live sandbox. Operator-owned volumes
+///   survive the recreate and reattach by name.
+///
+/// A sandbox with no recorded hash (created before this operator tracked it) is
+/// adopted without recreating. Policy resolution stays on the create/recreate
+/// path so re-reconciles of a settled sandbox are cheap and don't fail if a
+/// referenced `OpenShellPolicy` is later removed.
 async fn converge(
     ctx: &Context,
     namespace: &str,
     name: &str,
     sandbox: &OpenShellSandbox,
+    desired_hash: &str,
 ) -> Result<SandboxState> {
     volumes::validate(&sandbox.spec.volumes)?;
     ensure_pvcs(ctx, namespace, name, &sandbox.spec.volumes).await?;
 
-    if let Some(existing) = ctx.gateway.get_sandbox(name).await? {
+    let Some(existing) = ctx.gateway.get_sandbox(name).await? else {
+        return create(ctx, namespace, name, sandbox).await;
+    };
+
+    let applied = sandbox
+        .status
+        .as_ref()
+        .and_then(|status| status.applied_spec_hash.as_deref());
+    if !immutable_drift(applied, desired_hash) {
         return Ok(existing);
     }
+
+    warn!(%name, "immutable spec drift; recreating gateway sandbox");
+    record_event(
+        ctx,
+        sandbox,
+        EventType::Normal,
+        "Recreating",
+        "Recreate",
+        "immutable field changed; deleting and recreating the gateway sandbox (operator-owned volumes are preserved)".to_owned(),
+    )
+    .await;
+    recreate(ctx, namespace, name, sandbox).await
+}
+
+/// Whether an existing gateway sandbox must be recreated to match desired state.
+///
+/// Recreate only when a hash was previously recorded and differs. A missing
+/// hash (`None`) means the sandbox predates hash tracking and is adopted as-is
+/// rather than needlessly recreated.
+fn immutable_drift(applied: Option<&str>, desired: &str) -> bool {
+    matches!(applied, Some(hash) if hash != desired)
+}
+
+/// Delete the gateway sandbox, wait for it to disappear, then create it afresh.
+///
+/// The poll deliberately blocks this reconcile worker for up to ~60s rather
+/// than threading a delete/create state machine across reconciles — recreate is
+/// a rare event and other resources reconcile on their own worker futures. The
+/// gateway's `delete_sandbox` is idempotent, so a `RecreateTimeout` requeue that
+/// re-enters this path and deletes again is harmless.
+async fn recreate(
+    ctx: &Context,
+    namespace: &str,
+    name: &str,
+    sandbox: &OpenShellSandbox,
+) -> Result<SandboxState> {
+    ctx.gateway.delete_sandbox(name).await?;
+    for _ in 0..RECREATE_POLL_ATTEMPTS {
+        if ctx.gateway.get_sandbox(name).await?.is_none() {
+            return create(ctx, namespace, name, sandbox).await;
+        }
+        tokio::time::sleep(RECREATE_POLL_INTERVAL).await;
+    }
+    // Still terminating; bail out and let the requeue retry the create.
+    Err(Error::RecreateTimeout {
+        name: name.to_owned(),
+    })
+}
+
+/// Resolve the policy and create the gateway sandbox from the current spec.
+async fn create(
+    ctx: &Context,
+    namespace: &str,
+    name: &str,
+    sandbox: &OpenShellSandbox,
+) -> Result<SandboxState> {
     info!(%name, "creating sandbox on gateway");
     let policy = resolve_policy(ctx, namespace, &sandbox.spec).await?;
     let create = build_sandbox_create(name, &sandbox.spec, policy);
     ctx.gateway.create_sandbox(create).await
+}
+
+/// Fingerprint of the spec fields that are immutable on a live gateway sandbox.
+///
+/// A change here forces a delete+recreate. It deliberately covers only the
+/// immutable inputs: `image`, `environment`, `gpu`, the inline policy's
+/// `landlock`/`process` (the hard-immutable sections), and the volume mounts
+/// (wired into the pod at create time). It excludes `networkPolicies` and
+/// `filesystem` (mutable / additively mutable on a live sandbox) and
+/// `policyRef` (editing a shared policy is deliberately not retroactive).
+fn immutable_fingerprint(spec: &OpenShellSandboxSpec) -> String {
+    let inline = spec.policy.as_ref();
+    let material = json!({
+        "image": spec.image,
+        "environment": spec.environment,
+        "gpu": spec.gpu,
+        "landlock": inline.and_then(|policy| policy.landlock.as_ref()),
+        "process": inline.and_then(|policy| policy.process.as_ref()),
+        "volumes": spec.volumes.iter().map(|volume| json!({
+            "name": volume.name,
+            "mountPath": volume.mount_path,
+            "subPath": volume.sub_path,
+            "readOnly": volume.read_only,
+        })).collect::<Vec<_>>(),
+    });
+    // `serde_json::Map` is BTreeMap-backed, so key order is stable and the
+    // rendering is deterministic for a given spec.
+    let rendered = serde_json::to_string(&material).unwrap_or_default();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&rendered, &mut hasher);
+    format!("{:016x}", std::hash::Hasher::finish(&hasher))
 }
 
 /// Where a sandbox's policy document comes from, after enforcing that `policy`
@@ -318,8 +435,14 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, PolicySource, build_sandbox_create, map_phase, select_policy_source};
-    use crate::crd::{OpenShellPolicySpec, OpenShellSandboxSpec, SandboxVolume};
+    use super::{
+        Phase, PolicySource, build_sandbox_create, immutable_drift, immutable_fingerprint,
+        map_phase, select_policy_source,
+    };
+    use crate::crd::{
+        FilesystemPolicy, LandlockPolicy, OpenShellPolicySpec, OpenShellSandboxSpec,
+        PreservedValue, ProcessPolicy, SandboxVolume,
+    };
     use crate::error::Error;
     use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
     use openshell_sdk::SandboxPhase;
@@ -426,5 +549,104 @@ mod tests {
         assert_eq!(map_phase(SandboxPhase::Provisioning), Phase::Provisioning);
         // Unspecified/unknown settle as provisioning.
         assert_eq!(map_phase(SandboxPhase::Unspecified), Phase::Provisioning);
+    }
+
+    #[test]
+    fn immutable_drift_adopts_when_no_prior_hash() {
+        // No recorded hash: adopt the existing sandbox, never recreate.
+        assert!(!immutable_drift(None, "abc"));
+    }
+
+    #[test]
+    fn immutable_drift_only_on_changed_hash() {
+        assert!(!immutable_drift(Some("abc"), "abc"));
+        assert!(immutable_drift(Some("abc"), "def"));
+    }
+
+    #[test]
+    fn fingerprint_is_stable_for_equal_specs() {
+        assert_eq!(
+            immutable_fingerprint(&sample_spec()),
+            immutable_fingerprint(&sample_spec())
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_on_immutable_fields() {
+        let base = immutable_fingerprint(&sample_spec());
+
+        let mut image = sample_spec();
+        image.image = Some("ghcr.io/example/sandbox:v2".to_owned());
+        assert_ne!(immutable_fingerprint(&image), base);
+
+        let mut gpu = sample_spec();
+        gpu.gpu = false;
+        assert_ne!(immutable_fingerprint(&gpu), base);
+
+        let mut env = sample_spec();
+        env.environment.insert("LOG".to_owned(), "debug".to_owned());
+        assert_ne!(immutable_fingerprint(&env), base);
+
+        let mut landlock = sample_spec();
+        landlock.policy = Some(OpenShellPolicySpec {
+            landlock: Some(LandlockPolicy {
+                compatibility: "enforce".to_owned(),
+            }),
+            ..OpenShellPolicySpec::default()
+        });
+        assert_ne!(immutable_fingerprint(&landlock), base);
+
+        let mut process = sample_spec();
+        process.policy = Some(OpenShellPolicySpec {
+            process: Some(ProcessPolicy {
+                run_as_user: "nobody".to_owned(),
+                run_as_group: String::new(),
+            }),
+            ..OpenShellPolicySpec::default()
+        });
+        assert_ne!(immutable_fingerprint(&process), base);
+
+        let mut volume = sample_spec();
+        volume.volumes.push(SandboxVolume {
+            name: "data".to_owned(),
+            mount_path: "/data".to_owned(),
+            sub_path: None,
+            read_only: false,
+            claim: PersistentVolumeClaimSpec::default(),
+        });
+        assert_ne!(immutable_fingerprint(&volume), base);
+    }
+
+    #[test]
+    fn fingerprint_ignores_mutable_fields_and_policy_ref() {
+        let base = immutable_fingerprint(&sample_spec());
+
+        // Additively-mutable / mutable sections must not force a recreate.
+        let mut filesystem = sample_spec();
+        filesystem.policy = Some(OpenShellPolicySpec {
+            filesystem: Some(FilesystemPolicy {
+                include_workdir: true,
+                read_only: vec!["/etc".to_owned()],
+                read_write: Vec::new(),
+            }),
+            ..OpenShellPolicySpec::default()
+        });
+        assert_eq!(immutable_fingerprint(&filesystem), base);
+
+        let mut network = sample_spec();
+        network.policy = Some(OpenShellPolicySpec {
+            network_policies: std::iter::once((
+                "claude_code".to_owned(),
+                PreservedValue(serde_json::json!({ "endpoints": [] })),
+            ))
+            .collect(),
+            ..OpenShellPolicySpec::default()
+        });
+        assert_eq!(immutable_fingerprint(&network), base);
+
+        // Editing a shared policy by reference is deliberately not retroactive.
+        let mut by_ref = sample_spec();
+        by_ref.policy_ref = Some("restricted".to_owned());
+        assert_eq!(immutable_fingerprint(&by_ref), base);
     }
 }

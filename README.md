@@ -5,10 +5,11 @@ Declarative, Kubernetes-native control over
 `kubectl apply` instead of talking to the gateway directly.
 
 > **Status:** early development. `OpenShellSandbox` (create / get / delete with
-> finalizer cleanup, operator-provisioned persistent volumes, and standard
-> `Ready` conditions + events), `OpenShellProvider` (static credentials resolved
-> from a Secret, synced to the gateway), and `OpenShellPolicy` (a reusable sandbox
-> policy document applied at sandbox creation) resources are implemented.
+> finalizer cleanup, operator-provisioned persistent volumes, recreate-on-drift
+> for immutable fields, and standard `Ready` conditions + events),
+> `OpenShellProvider` (static credentials resolved from a Secret, synced to the
+> gateway), and `OpenShellPolicy` (a reusable sandbox policy document applied at
+> sandbox creation) resources are implemented.
 
 ## What it does
 
@@ -171,6 +172,33 @@ disposable sandbox, its data survives that recreation. Mounting a volume under
 itself is deleted: `Retain` (default) keeps them so the data outlives the
 resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox
 mounts a filesystem.
+
+### Updates and recreation
+
+The gateway treats most of a sandbox's spec as immutable on a running sandbox.
+When you edit an **immutable** field — `image`, `environment`, `gpu`, or the
+inline policy's `landlock`/`process` — the operator converges by **deleting and
+recreating the gateway sandbox**. It tracks the applied fields as a hash in
+`.status.appliedSpecHash`, so it recreates only on a real change (and adopts a
+pre-existing sandbox without recreating it). During a recreate it emits a
+`Normal` `Recreating` event.
+
+Operator-owned volumes are anchored to the `OpenShellSandbox`, so they survive
+the recreate and reattach by name — the whole reason for the volumes feature.
+
+> ⚠️ **Recreation only preserves data on operator-owned volumes.** Deleting the
+> gateway sandbox cascade-deletes anything the *gateway* owns — including its
+> injected workspace PVC when the sandbox has **no** custom volume over
+> `/sandbox`. Only the custom volumes above (referenced by `claimName`, with no
+> owner reference) survive. To keep workspace state across an image or policy
+> change, mount a volume at `/sandbox`; otherwise the workspace is rebuilt from
+> the image on recreate.
+
+What does **not** trigger a recreate: `networkPolicies` and `filesystem` (which
+the gateway allows to change / grow on a live sandbox), and edits to a
+referenced `OpenShellPolicy` (applying a shared policy is deliberately not
+retroactive — only the sandbox's own spec drives recreation). In-place
+convergence of the mutable fields is future work.
 
 ## Status and events
 

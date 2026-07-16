@@ -264,6 +264,10 @@ spec:
             description: Observed state mirrored from the gateway.
             nullable: true
             properties:
+              appliedSpecHash:
+                description: Hash of the immutable spec fields last applied to the gateway sandbox. A change here versus the current spec is immutable drift, which the operator resolves by deleting and recreating the gateway sandbox.
+                nullable: true
+                type: string
               conditions:
                 description: Standard conditions; the `Ready` condition reports reconcile health and, on failure, a machine-readable `reason` and human `message`.
                 items:

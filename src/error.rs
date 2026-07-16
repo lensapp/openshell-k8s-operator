@@ -96,6 +96,15 @@ pub enum Error {
     #[error("invalid volume: {0}")]
     VolumeInvalid(String),
 
+    /// A sandbox recreate deleted the gateway sandbox but it did not disappear
+    /// within the poll budget (~60s), so the recreate was not completed this
+    /// reconcile. Transient — the requeue retries once termination finishes.
+    #[error("sandbox {name} did not finish deleting before recreate")]
+    RecreateTimeout {
+        /// Sandbox name.
+        name: String,
+    },
+
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),
@@ -118,6 +127,7 @@ impl Error {
             Self::PolicyInvalid(_) => "PolicyInvalid",
             Self::PolicySourceConflict => "PolicyConflict",
             Self::VolumeInvalid(_) => "VolumeInvalid",
+            Self::RecreateTimeout { .. } => "RecreateTimeout",
             Self::Finalizer(_) => "FinalizerError",
         }
     }
