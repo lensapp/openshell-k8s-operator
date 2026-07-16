@@ -12,7 +12,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use openshell_sdk::raw::proto::{
-    self, CreateProviderRequest, CreateSandboxRequest, DeleteProviderRequest, GetProviderRequest,
+    self, AttachSandboxProviderRequest, CreateProviderRequest, CreateSandboxRequest,
+    DeleteProviderRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
     UpdateProviderRequest,
 };
 use openshell_sdk::{ClientConfig, OpenShellClient, SandboxPhase, SdkError};
@@ -20,17 +21,19 @@ use tonic::Code;
 
 use crate::error::{Error, Result};
 
-/// Minimal projection of a gateway sandbox the reconciler consumes.
+/// Projection of a gateway sandbox the reconciler consumes.
 ///
-/// Deliberately not the SDK's `SandboxRef`: the reconciler only needs the id
-/// and phase, and `SandboxRef` is `#[non_exhaustive]` (no public constructor),
-/// which would make the trait impossible to fake in tests.
+/// Deliberately not the SDK's `SandboxRef`: the reconciler needs the current
+/// providers to converge them, and `SandboxRef` is `#[non_exhaustive]` (no
+/// public constructor), which would make the trait impossible to fake in tests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SandboxState {
     /// Gateway-assigned sandbox identifier.
     pub id: String,
     /// Current lifecycle phase reported by the gateway.
     pub phase: SandboxPhase,
+    /// Providers currently attached, as the gateway reports them.
+    pub providers: Vec<String>,
 }
 
 /// Resolved sandbox desired state handed to the gateway.
@@ -85,6 +88,12 @@ pub trait Gateway: Send + Sync {
     /// Delete a sandbox by name. Returns `false` if it was already absent.
     async fn delete_sandbox(&self, name: &str) -> Result<bool>;
 
+    /// Attach a provider to a live sandbox.
+    async fn attach_provider(&self, sandbox: &str, provider: &str) -> Result<()>;
+
+    /// Detach a provider from a live sandbox.
+    async fn detach_provider(&self, sandbox: &str, provider: &str) -> Result<()>;
+
     /// Create or update a provider so it matches `input`.
     async fn upsert_provider(&self, input: ProviderInput) -> Result<()>;
 
@@ -123,24 +132,56 @@ impl Gateway for SdkGateway {
                 "sandbox missing from gateway response",
             ))
         })?;
-        let phase = SandboxPhase::from(sandbox.phase());
-        let id = sandbox.metadata.map(|meta| meta.id).unwrap_or_default();
-        Ok(SandboxState { id, phase })
+        Ok(sandbox_state(&sandbox))
     }
 
     async fn get_sandbox(&self, name: &str) -> Result<Option<SandboxState>> {
-        match self.client.get_sandbox(name).await {
-            Ok(sandbox) => Ok(Some(SandboxState {
-                id: sandbox.id,
-                phase: sandbox.phase,
-            })),
-            Err(SdkError::NotFound { .. }) => Ok(None),
-            Err(err) => Err(err.into()),
+        // Use the raw client so the full spec (current providers) and metadata
+        // (resource version) come back for convergence — the curated
+        // `get_sandbox` projects those away.
+        let mut grpc = self.client.raw_grpc();
+        match grpc
+            .get_sandbox(GetSandboxRequest {
+                name: name.to_owned(),
+            })
+            .await
+        {
+            Ok(response) => Ok(response.into_inner().sandbox.as_ref().map(sandbox_state)),
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(status) => Err(status.into()),
         }
     }
 
     async fn delete_sandbox(&self, name: &str) -> Result<bool> {
         Ok(self.client.delete_sandbox(name).await?)
+    }
+
+    async fn attach_provider(&self, sandbox: &str, provider: &str) -> Result<()> {
+        self.client
+            .raw_grpc()
+            .attach_sandbox_provider(AttachSandboxProviderRequest {
+                sandbox_name: sandbox.to_owned(),
+                provider_name: provider.to_owned(),
+                // 0 → the gateway applies against the current resource version.
+                // The operator is the sole writer of a sandbox and may change
+                // several providers in one reconcile (each attach bumps the
+                // version), so pinning a pre-read version would self-conflict.
+                expected_resource_version: 0,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn detach_provider(&self, sandbox: &str, provider: &str) -> Result<()> {
+        self.client
+            .raw_grpc()
+            .detach_sandbox_provider(DetachSandboxProviderRequest {
+                sandbox_name: sandbox.to_owned(),
+                provider_name: provider.to_owned(),
+                expected_resource_version: 0,
+            })
+            .await?;
+        Ok(())
     }
 
     async fn upsert_provider(&self, input: ProviderInput) -> Result<()> {
@@ -199,6 +240,26 @@ impl Gateway for SdkGateway {
             })
             .await?;
         Ok(response.into_inner().deleted)
+    }
+}
+
+/// Project a raw proto `Sandbox` onto the reconciler's [`SandboxState`].
+fn sandbox_state(sandbox: &proto::Sandbox) -> SandboxState {
+    let phase = SandboxPhase::from(sandbox.phase());
+    let id = sandbox
+        .metadata
+        .as_ref()
+        .map(|meta| meta.id.clone())
+        .unwrap_or_default();
+    let providers = sandbox
+        .spec
+        .as_ref()
+        .map(|spec| spec.providers.clone())
+        .unwrap_or_default();
+    SandboxState {
+        id,
+        phase,
+        providers,
     }
 }
 

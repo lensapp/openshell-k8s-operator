@@ -9,6 +9,7 @@
 //! finalizer guarantees gateway-side cleanup on delete, and gateway state is
 //! mirrored back into `.status`.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -182,6 +183,9 @@ async fn converge(
         .as_ref()
         .and_then(|status| status.applied_spec_hash.as_deref());
     if !immutable_drift(applied, desired_hash) {
+        // In-place convergence of the mutable fields. Providers are runtime
+        // attachable/detachable; the rest (policy) is Ship 2.
+        converge_providers(ctx, name, &sandbox.spec.providers, &existing).await?;
         return Ok(existing);
     }
 
@@ -196,6 +200,48 @@ async fn converge(
     )
     .await;
     recreate(ctx, namespace, name, sandbox).await
+}
+
+/// Converge the sandbox's attached providers toward `desired`, attaching those
+/// missing and detaching those no longer wanted.
+///
+/// Diffs against the providers the gateway actually reports (`existing`), so it
+/// also heals drift applied out of band. Attaching a provider the gateway
+/// doesn't know yet fails and requeues — an eventually-consistent race with the
+/// `OpenShellProvider` reconcile, not a terminal error.
+async fn converge_providers(
+    ctx: &Context,
+    name: &str,
+    desired: &[String],
+    existing: &SandboxState,
+) -> Result<()> {
+    let (attach, detach) = provider_delta(desired, &existing.providers);
+    for provider in attach {
+        info!(%name, %provider, "attaching provider");
+        ctx.gateway.attach_provider(name, &provider).await?;
+    }
+    for provider in detach {
+        info!(%name, %provider, "detaching provider");
+        ctx.gateway.detach_provider(name, &provider).await?;
+    }
+    Ok(())
+}
+
+/// Set difference of desired vs. current provider names: `(to_attach, to_detach)`.
+fn provider_delta(desired: &[String], current: &[String]) -> (Vec<String>, Vec<String>) {
+    let current_set: BTreeSet<&str> = current.iter().map(String::as_str).collect();
+    let desired_set: BTreeSet<&str> = desired.iter().map(String::as_str).collect();
+    let attach = desired
+        .iter()
+        .filter(|provider| !current_set.contains(provider.as_str()))
+        .cloned()
+        .collect();
+    let detach = current
+        .iter()
+        .filter(|provider| !desired_set.contains(provider.as_str()))
+        .cloned()
+        .collect();
+    (attach, detach)
 }
 
 /// Whether an existing gateway sandbox must be recreated to match desired state.
@@ -437,7 +483,7 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 mod tests {
     use super::{
         Phase, PolicySource, build_sandbox_create, immutable_drift, immutable_fingerprint,
-        map_phase, select_policy_source,
+        map_phase, provider_delta, select_policy_source,
     };
     use crate::crd::{
         FilesystemPolicy, LandlockPolicy, OpenShellPolicySpec, OpenShellSandboxSpec,
@@ -549,6 +595,35 @@ mod tests {
         assert_eq!(map_phase(SandboxPhase::Provisioning), Phase::Provisioning);
         // Unspecified/unknown settle as provisioning.
         assert_eq!(map_phase(SandboxPhase::Unspecified), Phase::Provisioning);
+    }
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn provider_delta_attaches_missing_and_detaches_extra() {
+        let (attach, detach) = provider_delta(&owned(&["a", "c"]), &owned(&["a", "b"]));
+        assert_eq!(attach, owned(&["c"]));
+        assert_eq!(detach, owned(&["b"]));
+    }
+
+    #[test]
+    fn provider_delta_is_empty_when_converged() {
+        let (attach, detach) = provider_delta(&owned(&["a", "b"]), &owned(&["b", "a"]));
+        assert!(attach.is_empty());
+        assert!(detach.is_empty());
+    }
+
+    #[test]
+    fn provider_delta_handles_empty_sides() {
+        let (attach, detach) = provider_delta(&owned(&["a"]), &[]);
+        assert_eq!(attach, owned(&["a"]));
+        assert!(detach.is_empty());
+
+        let (attach, detach) = provider_delta(&[], &owned(&["a"]));
+        assert!(attach.is_empty());
+        assert_eq!(detach, owned(&["a"]));
     }
 
     #[test]

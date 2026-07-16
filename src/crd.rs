@@ -45,6 +45,8 @@ pub struct OpenShellSandboxSpec {
     pub environment: BTreeMap<String, String>,
 
     /// Provider names to attach. Each must already exist on the gateway.
+    /// Converged in place on a running sandbox: adding or removing a name
+    /// attaches or detaches the provider without a recreate.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<String>,
 

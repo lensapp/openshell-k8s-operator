@@ -194,11 +194,15 @@ the recreate and reattach by name — the whole reason for the volumes feature.
 > change, mount a volume at `/sandbox`; otherwise the workspace is rebuilt from
 > the image on recreate.
 
-What does **not** trigger a recreate: `networkPolicies` and `filesystem` (which
-the gateway allows to change / grow on a live sandbox), and edits to a
-referenced `OpenShellPolicy` (applying a shared policy is deliberately not
-retroactive — only the sandbox's own spec drives recreation). In-place
-convergence of the mutable fields is future work.
+What does **not** trigger a recreate: `providers`, `networkPolicies`, and
+`filesystem` (all mutable on a live sandbox), and edits to a referenced
+`OpenShellPolicy` (applying a shared policy is deliberately not retroactive —
+only the sandbox's own spec drives recreation). Of these, **`providers` are
+converged in place** — editing `spec.providers` on a running sandbox attaches
+the newly-listed providers and detaches the removed ones, reconciled against
+what the gateway actually reports (so a manual detach is healed too). In-place
+convergence of the policy's mutable fields (`networkPolicies`, additive
+`filesystem`) is the next step.
 
 ## Status and events
 
