@@ -17,6 +17,7 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::{
     Api, Resource, ResourceExt,
     api::{Patch, PatchParams},
@@ -24,10 +25,10 @@ use kube::{
 };
 use tracing::{info, warn};
 
-use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
+use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_failure};
 use crate::crd::{OpenShellPolicy, OpenShellPolicyStatus};
 use crate::error::{Error, Result};
-use crate::policy;
+use crate::{conditions, policy};
 
 /// Run the policy controller until the process is stopped.
 pub async fn run(ctx: Arc<Context>) {
@@ -50,25 +51,40 @@ async fn reconcile(policy: Arc<OpenShellPolicy>, ctx: Arc<Context>) -> Result<Ac
     info!(%name, %namespace, "validating OpenShellPolicy");
 
     // A rejected document is a user error, not a transient failure: record it
-    // and requeue normally. Editing the document bumps `.metadata.generation`,
-    // which triggers a fresh reconcile — retrying an unchanged bad policy would
-    // not help.
-    let status = match policy::to_proto(&policy.spec) {
-        Ok(_) => OpenShellPolicyStatus {
-            valid: Some(true),
-            message: None,
-            observed_generation: policy.meta().generation,
-        },
+    // on the Ready condition and requeue normally. Editing the document bumps
+    // `.metadata.generation`, which triggers a fresh reconcile — retrying an
+    // unchanged bad policy would not help.
+    let generation = policy.meta().generation;
+    let now = Time(chrono::Utc::now());
+    let ready = match policy::to_proto(&policy.spec) {
+        Ok(_) => conditions::condition(
+            conditions::READY,
+            true,
+            "Reconciled",
+            "policy document is valid",
+            generation,
+            now,
+        ),
         Err(err) => {
             warn!(%name, error = %err, "policy is invalid");
-            OpenShellPolicyStatus {
-                valid: Some(false),
-                message: Some(err.to_string()),
-                observed_generation: policy.meta().generation,
-            }
+            record_failure(&ctx, policy.as_ref(), "Validate", &err).await;
+            conditions::condition(
+                conditions::READY,
+                false,
+                err.reason(),
+                err.to_string(),
+                generation,
+                now,
+            )
         }
     };
 
+    let mut current = policy.status.clone().unwrap_or_default().conditions;
+    conditions::set(&mut current, ready);
+    let status = OpenShellPolicyStatus {
+        conditions: current,
+        observed_generation: generation,
+    };
     patch_status(&ctx, &namespace, &name, &status).await?;
     Ok(Action::requeue(REQUEUE_INTERVAL))
 }

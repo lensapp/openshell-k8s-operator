@@ -100,3 +100,37 @@ pub enum Error {
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),
 }
+
+impl Error {
+    /// A machine-readable `PascalCase` slug for this error, used as the `reason`
+    /// on a `Ready=False` status condition and Kubernetes event.
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        match self {
+            Self::Gateway(_) | Self::GatewayRpc(_) => "GatewayError",
+            Self::Kube(_) => "KubernetesError",
+            Self::MissingNamespace => "MissingNamespace",
+            Self::SecretNotFound { .. } => "SecretNotFound",
+            Self::SecretNotEntitled { .. } => "SecretNotEntitled",
+            Self::SecretKeyMissing { .. } => "SecretKeyMissing",
+            Self::SecretValueNotUtf8 { .. } => "SecretValueNotUtf8",
+            Self::PolicyNotFound { .. } => "PolicyNotFound",
+            Self::PolicyInvalid(_) => "PolicyInvalid",
+            Self::PolicySourceConflict => "PolicyConflict",
+            Self::VolumeInvalid(_) => "VolumeInvalid",
+            Self::Finalizer(_) => "FinalizerError",
+        }
+    }
+
+    /// Whether this error can only be fixed by editing the resource spec.
+    ///
+    /// A terminal error will not clear on its own, so retrying it on the fast
+    /// error cadence is pure churn — the spec edit that fixes it bumps
+    /// `.metadata.generation` and re-triggers reconcile anyway. (`PolicyNotFound`
+    /// is deliberately *not* terminal: the referenced policy may appear later,
+    /// and requeueing lets the sandbox recover once it does.)
+    #[must_use]
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::PolicySourceConflict | Self::VolumeInvalid(_))
+    }
+}

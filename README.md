@@ -5,10 +5,10 @@ Declarative, Kubernetes-native control over
 `kubectl apply` instead of talking to the gateway directly.
 
 > **Status:** early development. `OpenShellSandbox` (create / get / delete with
-> finalizer cleanup, status mirroring, and operator-provisioned persistent
-> volumes), `OpenShellProvider` (static credentials resolved from a Secret, synced
-> to the gateway), and `OpenShellPolicy` (a reusable sandbox policy document
-> applied at sandbox creation) resources are implemented.
+> finalizer cleanup, operator-provisioned persistent volumes, and standard
+> `Ready` conditions + events), `OpenShellProvider` (static credentials resolved
+> from a Secret, synced to the gateway), and `OpenShellPolicy` (a reusable sandbox
+> policy document applied at sandbox creation) resources are implemented.
 
 ## What it does
 
@@ -85,16 +85,19 @@ spec:
 ```console
 $ kubectl apply -f example.yaml
 $ kubectl get oss
-NAME         PHASE   SANDBOX    AGE
-my-sandbox   Ready   3f2b...    30s
+NAME         READY   PHASE   SANDBOX    AGE
+my-sandbox   True    Ready   3f2b...    30s
 
 $ kubectl get osp anthropic
-NAME        TYPE     PHASE   AGE
-anthropic   claude   Ready   30s
+NAME        TYPE     READY   AGE
+anthropic   claude   True    30s
 
 $ kubectl get ospol restricted
-NAME         VALID   AGE
-restricted   true    30s
+NAME         READY   AGE
+restricted   True    30s
+
+$ kubectl wait --for=condition=Ready oss/my-sandbox
+openshellsandbox.openshell.lenshq.io/my-sandbox condition met
 ```
 
 The three resource types are covered in detail below.
@@ -123,8 +126,8 @@ resolves it and applies it when the sandbox is created. The high-value sections
 (`filesystem`, `landlock`, `process`) are typed; `networkPolicies` is passed
 through opaquely, validated by the gateway's own policy parser rather than
 mirrored here. The `OpenShellPolicy` reconciler validates the document and
-reports the result in `.status.valid` / `.status.message`, so a bad policy
-surfaces before any sandbox uses it.
+reports the result on its `Ready` condition (with the parser's diagnostic in
+the condition message), so a bad policy surfaces before any sandbox uses it.
 
 For a one-off sandbox you can skip the separate resource and inline the same
 document directly under `spec.policy` instead of `spec.policyRef` (specify at
@@ -168,6 +171,26 @@ disposable sandbox, its data survives that recreation. Mounting a volume under
 itself is deleted: `Retain` (default) keeps them so the data outlives the
 resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox
 mounts a filesystem.
+
+## Status and events
+
+Every resource reports reconcile health the standard way, so existing tooling
+just works:
+
+- **`.status.conditions[]`** is the durable source of truth. Each resource
+  carries a standard `Ready` condition (`metav1.Condition`, with `reason`,
+  `message`, and `observedGeneration`), so `kubectl wait --for=condition=Ready`,
+  Argo CD / Flux health assessment, and kstatus all understand it. On failure
+  `Ready` goes `False` with a machine-readable `reason` (e.g.
+  `VolumeProvisionFailed`, `SecretNotFound`, `PolicyConflict`) and a human
+  `message`.
+- **Kubernetes events** are the transient breadcrumb trail. Reconcile failures
+  emit a `Warning` event against the resource, visible in `kubectl describe`.
+  Events expire; conditions do not — so conditions, not events, are what
+  automation should key on.
+
+The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in
+`.status.phase` (a separate axis from `Ready`, much like `Pod.status.phase`).
 
 ## Architecture
 

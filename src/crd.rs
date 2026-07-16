@@ -7,6 +7,7 @@
 //! the Kubernetes API. Mapping to and from the gateway's SDK types lives in the
 //! controller, keeping this module free of the gateway dependency.
 
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
@@ -28,6 +29,7 @@ use std::collections::BTreeMap;
     namespaced,
     status = "OpenShellSandboxStatus",
     shortname = "oss",
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
     printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
     printcolumn = r#"{"name":"Sandbox","type":"string","jsonPath":".status.sandboxId"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
@@ -126,7 +128,13 @@ pub enum VolumeRetention {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenShellSandboxStatus {
-    /// Coarse lifecycle phase.
+    /// Standard conditions; the `Ready` condition reports reconcile health and,
+    /// on failure, a machine-readable `reason` and human `message`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+
+    /// Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`,
+    /// which reports the operator's own reconcile outcome).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<Phase>,
 
@@ -166,7 +174,7 @@ pub enum Phase {
     status = "OpenShellProviderStatus",
     shortname = "osp",
     printcolumn = r#"{"name":"Type","type":"string","jsonPath":".spec.type"}"#,
-    printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
 #[serde(rename_all = "camelCase")]
@@ -201,9 +209,10 @@ pub struct SecretRef {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenShellProviderStatus {
-    /// Coarse lifecycle phase.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub phase: Option<OpenShellProviderPhase>,
+    /// Standard conditions; the `Ready` condition reports whether credentials
+    /// resolved and synced to the gateway, with a `reason`/`message` on failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
 
     /// `.metadata.generation` last reconciled, for GitOps health checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,15 +222,6 @@ pub struct OpenShellProviderStatus {
     /// Secret rotation and lets operators see when a resync last changed state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_hash: Option<String>,
-}
-
-/// Coarse provider lifecycle phase surfaced in `.status.phase`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-pub enum OpenShellProviderPhase {
-    /// Credentials resolved and synced to the gateway.
-    Ready,
-    /// Secret missing, not entitled, or the gateway rejected the sync.
-    Error,
 }
 
 /// A reusable sandbox policy document.
@@ -246,7 +246,7 @@ pub enum OpenShellProviderPhase {
     namespaced,
     status = "OpenShellPolicyStatus",
     shortname = "ospol",
-    printcolumn = r#"{"name":"Valid","type":"string","jsonPath":".status.valid"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
 #[serde(rename_all = "camelCase")]
@@ -353,13 +353,11 @@ pub struct ProcessPolicy {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenShellPolicyStatus {
-    /// Whether the document parsed and validated against the gateway schema.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid: Option<bool>,
-
-    /// Human-readable validation error, when `valid` is `false`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    /// Standard conditions; the `Ready` condition is `True` when the document
+    /// parsed and validated against the gateway schema, and `False` with the
+    /// parser's diagnostic in `message` otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
 
     /// `.metadata.generation` last reconciled, for GitOps health checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]

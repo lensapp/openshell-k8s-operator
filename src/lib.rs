@@ -14,6 +14,7 @@
 //! applied to a sandbox at creation via `spec.policyRef`, or inlined under
 //! `spec.policy`).
 
+pub mod conditions;
 pub mod controllers;
 pub mod crd;
 pub mod error;
@@ -24,8 +25,8 @@ pub mod volumes;
 
 pub use crd::{
     FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,
-    OpenShellProvider, OpenShellProviderPhase, OpenShellProviderSpec, OpenShellProviderStatus,
-    OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy,
-    SandboxVolume, SecretRef, VolumeRetention,
+    OpenShellProvider, OpenShellProviderSpec, OpenShellProviderStatus, OpenShellSandbox,
+    OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy, SandboxVolume, SecretRef,
+    VolumeRetention,
 };
 pub use error::{Error, Result};

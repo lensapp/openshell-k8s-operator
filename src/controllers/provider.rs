@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::{
     Api, Resource, ResourceExt,
     api::{Patch, PatchParams},
@@ -28,8 +29,9 @@ use kube::{
 };
 use tracing::{info, warn};
 
-use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
-use crate::crd::{OpenShellProvider, OpenShellProviderPhase, OpenShellProviderStatus};
+use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_failure};
+use crate::conditions;
+use crate::crd::{OpenShellProvider, OpenShellProviderStatus};
 use crate::error::{Error, Result};
 use crate::gateway::{Gateway, ProviderInput};
 use crate::secret;
@@ -92,26 +94,53 @@ async fn apply(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Ac
     let namespace = provider.namespace().ok_or(Error::MissingNamespace)?;
     info!(%name, %namespace, "reconciling OpenShellProvider");
 
+    let generation = provider.meta().generation;
+    let now = Time(chrono::Utc::now());
+    let mut current = provider.status.clone().unwrap_or_default().conditions;
+
     match sync_provider(&ctx, &provider, &namespace, &name).await {
         Ok(hash) => {
+            conditions::set(
+                &mut current,
+                conditions::condition(
+                    conditions::READY,
+                    true,
+                    "Reconciled",
+                    "credentials synced to the gateway",
+                    generation,
+                    now,
+                ),
+            );
             let status = OpenShellProviderStatus {
-                phase: Some(OpenShellProviderPhase::Ready),
-                observed_generation: provider.meta().generation,
+                conditions: current,
+                observed_generation: generation,
                 synced_hash: Some(hash),
             };
             patch_status(&ctx, &namespace, &name, &status).await?;
             Ok(Action::requeue(REQUEUE_INTERVAL))
         }
         Err(err) => {
+            record_failure(&ctx, provider.as_ref(), "Sync", &err).await;
+            conditions::set(
+                &mut current,
+                conditions::condition(
+                    conditions::READY,
+                    false,
+                    err.reason(),
+                    err.to_string(),
+                    generation,
+                    now,
+                ),
+            );
             // Record the failure but keep any prior synced hash for visibility.
             let status = OpenShellProviderStatus {
-                phase: Some(OpenShellProviderPhase::Error),
-                observed_generation: provider.meta().generation,
+                conditions: current,
+                observed_generation: generation,
                 synced_hash: provider.status.as_ref().and_then(|s| s.synced_hash.clone()),
             };
             // Don't let a status-patch failure mask the real sync error.
             if let Err(patch_err) = patch_status(&ctx, &namespace, &name, &status).await {
-                warn!(error = %patch_err, "failed to record Error status");
+                warn!(error = %patch_err, "failed to record failure status");
             }
             Err(err)
         }

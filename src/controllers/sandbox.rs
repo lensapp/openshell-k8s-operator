@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::PersistentVolumeClaim;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::{
     Api, Resource, ResourceExt,
     api::{DeleteParams, ListParams, Patch, PatchParams, PostParams},
@@ -26,14 +27,14 @@ use openshell_sdk::raw::proto;
 use serde_json::json;
 use tracing::{info, warn};
 
-use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL};
+use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_failure};
 use crate::crd::{
     OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
     OpenShellSandboxStatus, Phase, VolumeRetention,
 };
 use crate::error::{Error, Result};
-use crate::gateway::SandboxCreate;
-use crate::{policy, volumes};
+use crate::gateway::{SandboxCreate, SandboxState};
+use crate::{conditions, policy, volumes};
 
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
 pub const FINALIZER: &str = "openshell.lenshq.io/sandbox-cleanup";
@@ -68,38 +69,95 @@ async fn reconcile(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<
 }
 
 /// Create-or-sync the sandbox on the gateway and mirror its state to `.status`.
+///
+/// The `Ready` condition is written on both success and failure, so a failed
+/// reconcile (bad volume, policy conflict, gateway error) surfaces on the
+/// resource instead of only in the operator log.
 async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Action> {
     let name = sandbox.name_any();
     let namespace = sandbox.namespace().ok_or(Error::MissingNamespace)?;
     info!(%name, %namespace, "reconciling OpenShellSandbox");
 
-    // Provision the sandbox's volumes first (idempotent), so their PVCs exist
-    // before the gateway schedules the pod that mounts them.
+    let generation = sandbox.meta().generation;
+    let now = Time(chrono::Utc::now());
+    let prior = sandbox.status.clone().unwrap_or_default();
+    let mut current = prior.conditions.clone();
+
+    match converge(&ctx, &namespace, &name, &sandbox).await {
+        Ok(state) => {
+            conditions::set(
+                &mut current,
+                conditions::condition(
+                    conditions::READY,
+                    true,
+                    "Reconciled",
+                    "sandbox reconciled with the gateway",
+                    generation,
+                    now,
+                ),
+            );
+            let status = OpenShellSandboxStatus {
+                conditions: current,
+                phase: Some(map_phase(state.phase)),
+                sandbox_id: Some(state.id),
+                observed_generation: generation,
+            };
+            patch_status(&ctx, &namespace, &name, &status).await?;
+            Ok(Action::requeue(REQUEUE_INTERVAL))
+        }
+        Err(err) => {
+            record_failure(&ctx, sandbox.as_ref(), "Reconcile", &err).await;
+            conditions::set(
+                &mut current,
+                conditions::condition(
+                    conditions::READY,
+                    false,
+                    err.reason(),
+                    err.to_string(),
+                    generation,
+                    now,
+                ),
+            );
+            // Keep any prior gateway phase / id for visibility.
+            let status = OpenShellSandboxStatus {
+                conditions: current,
+                phase: prior.phase,
+                sandbox_id: prior.sandbox_id,
+                observed_generation: generation,
+            };
+            if let Err(patch_err) = patch_status(&ctx, &namespace, &name, &status).await {
+                warn!(error = %patch_err, "failed to record failure status");
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Provision volumes and create-or-get the gateway sandbox, returning its state.
+///
+/// Volumes are provisioned first (idempotent) so their PVCs exist before the
+/// gateway schedules the pod that mounts them. The gateway sandbox is reused if
+/// it already exists (keyed on the CR name); otherwise the policy is resolved
+/// and it is created. Resolving the policy only on the create path keeps
+/// re-reconciles of a running sandbox cheap and avoids spuriously failing it if
+/// the referenced `OpenShellPolicy` is later removed — the policy is immutable
+/// on a running sandbox anyway.
+async fn converge(
+    ctx: &Context,
+    namespace: &str,
+    name: &str,
+    sandbox: &OpenShellSandbox,
+) -> Result<SandboxState> {
     volumes::validate(&sandbox.spec.volumes)?;
-    ensure_pvcs(&ctx, &namespace, &name, &sandbox.spec.volumes).await?;
+    ensure_pvcs(ctx, namespace, name, &sandbox.spec.volumes).await?;
 
-    // Reuse the gateway sandbox if it already exists (keyed on the CR name);
-    // otherwise resolve the policy and create it. Resolving the policy only on
-    // the create path keeps re-reconciles of a running sandbox cheap and avoids
-    // spuriously failing it if the referenced OpenShellPolicy is later removed — the
-    // policy is immutable on a running sandbox anyway.
-    let state = if let Some(existing) = ctx.gateway.get_sandbox(&name).await? {
-        existing
-    } else {
-        info!(%name, "creating sandbox on gateway");
-        let policy = resolve_policy(&ctx, &namespace, &sandbox.spec).await?;
-        let create = build_sandbox_create(&name, &sandbox.spec, policy);
-        ctx.gateway.create_sandbox(create).await?
-    };
-
-    let status = OpenShellSandboxStatus {
-        phase: Some(map_phase(state.phase)),
-        sandbox_id: Some(state.id),
-        observed_generation: sandbox.meta().generation,
-    };
-    patch_status(&ctx, &namespace, &name, &status).await?;
-
-    Ok(Action::requeue(REQUEUE_INTERVAL))
+    if let Some(existing) = ctx.gateway.get_sandbox(name).await? {
+        return Ok(existing);
+    }
+    info!(%name, "creating sandbox on gateway");
+    let policy = resolve_policy(ctx, namespace, &sandbox.spec).await?;
+    let create = build_sandbox_create(name, &sandbox.spec, policy);
+    ctx.gateway.create_sandbox(create).await
 }
 
 /// Where a sandbox's policy document comes from, after enforcing that `policy`
@@ -247,7 +305,15 @@ fn map_phase(phase: SandboxPhase) -> Phase {
 
 fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>) -> Action {
     warn!(error = %err, "sandbox reconcile failed; requeueing");
-    Action::requeue(ERROR_REQUEUE_INTERVAL)
+    // A terminal error (malformed spec) won't clear until the spec is edited,
+    // which re-triggers reconcile on its own — so back off to the normal cadence
+    // instead of hot-looping (and re-emitting the same event) every 15s.
+    let interval = if err.is_terminal() {
+        REQUEUE_INTERVAL
+    } else {
+        ERROR_REQUEUE_INTERVAL
+    };
+    Action::requeue(interval)
 }
 
 #[cfg(test)]

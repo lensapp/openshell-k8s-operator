@@ -15,6 +15,9 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -261,13 +264,46 @@ spec:
             description: Observed state mirrored from the gateway.
             nullable: true
             properties:
+              conditions:
+                description: Standard conditions; the `Ready` condition reports reconcile health and, on failure, a machine-readable `reason` and human `message`.
+                items:
+                  description: Condition contains details for one aspect of the current state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating details about the transition. This may be an empty string.
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty.
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
               observedGeneration:
                 description: '`.metadata.generation` last reconciled, for GitOps health checks.'
                 format: int64
                 nullable: true
                 type: integer
               phase:
-                description: Coarse lifecycle phase.
+                description: Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`, which reports the operator's own reconcile outcome).
                 enum:
                 - Provisioning
                 - Ready
@@ -308,8 +344,8 @@ spec:
     - jsonPath: .spec.type
       name: Type
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -355,18 +391,44 @@ spec:
             description: Observed state mirrored from the gateway for an `OpenShellProvider`.
             nullable: true
             properties:
+              conditions:
+                description: Standard conditions; the `Ready` condition reports whether credentials resolved and synced to the gateway, with a `reason`/`message` on failure.
+                items:
+                  description: Condition contains details for one aspect of the current state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating details about the transition. This may be an empty string.
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty.
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
               observedGeneration:
                 description: '`.metadata.generation` last reconciled, for GitOps health checks.'
                 format: int64
                 nullable: true
                 type: integer
-              phase:
-                description: Coarse lifecycle phase.
-                enum:
-                - Ready
-                - Error
-                nullable: true
-                type: string
               syncedHash:
                 description: Hash of the last successfully synced credentials + config. Surfaces Secret rotation and lets operators see when a resync last changed state.
                 nullable: true
@@ -397,8 +459,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.valid
-      name: Valid
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -470,19 +532,44 @@ spec:
             description: Observed validation state for an `OpenShellPolicy`.
             nullable: true
             properties:
-              message:
-                description: Human-readable validation error, when `valid` is `false`.
-                nullable: true
-                type: string
+              conditions:
+                description: Standard conditions; the `Ready` condition is `True` when the document parsed and validated against the gateway schema, and `False` with the parser's diagnostic in `message` otherwise.
+                items:
+                  description: Condition contains details for one aspect of the current state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating details about the transition. This may be an empty string.
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty.
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
               observedGeneration:
                 description: '`.metadata.generation` last reconciled, for GitOps health checks.'
                 format: int64
                 nullable: true
                 type: integer
-              valid:
-                description: Whether the document parsed and validated against the gateway schema.
-                nullable: true
-                type: boolean
             type: object
         required:
         - spec
