@@ -313,9 +313,15 @@ Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`,
 
 ## Architecture
 
-The operator authenticates to the gateway as an OIDC `User` (admin) with a bearer
-token minted by a small static OIDC issuer bundled in the chart — no external
-identity provider. The gateway keeps its normal posture: it enforces per-method
+The operator is a thin, declarative front-end over the gateway's gRPC control
+plane: it translates custom resources into gateway calls and mirrors gateway
+state back into `.status`. See [`docs/architecture.md`](docs/architecture.md) for
+the full design — module layout, the reconcile model, drift detection, and the
+runtime concerns.
+
+It authenticates to the gateway as an OIDC `User` (admin) with a bearer token
+minted by a small static OIDC issuer bundled in the chart — no external identity
+provider. The gateway keeps its normal posture: it enforces per-method
 authorization itself (fail-closed), so sandboxes, which present gateway-minted
 JWTs, are confined to the data plane without any additional proxy. See
 [`docs/operator-auth.md`](docs/operator-auth.md) for the full design.
