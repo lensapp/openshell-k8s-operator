@@ -102,10 +102,14 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-# Pod-level security context. Distroless already runs as nonroot; these harden
-# further and satisfy restricted Pod Security Standards.
+# Pod-level security context. The distroless images run as the built-in
+# `nonroot` user; pin it numerically (uid 65532) so kubelet can verify non-root
+# under `runAsNonRoot` — a named USER alone fails that check. Satisfies
+# restricted Pod Security Standards.
 podSecurityContext:
   runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
   seccompProfile:
     type: RuntimeDefault
 

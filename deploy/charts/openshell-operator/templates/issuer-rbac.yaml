@@ -30,10 +30,11 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "create"]
-  # and server-side-applies (patch) the JWKS ConfigMap.
+  # and server-side-applies the JWKS ConfigMap. SSA needs `patch`, plus `create`
+  # for the first apply when the ConfigMap does not yet exist.
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["patch"]
+    verbs: ["create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

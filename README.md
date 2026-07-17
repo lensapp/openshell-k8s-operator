@@ -235,6 +235,27 @@ The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in
 
 ## Install
 
+### Prerequisite: Agent Sandbox
+
+The OpenShell gateway provisions sandbox pods through the
+[Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubernetes SIG project
+(`sandboxes.agents.x-k8s.io`). Its controller and CRDs are a **cluster-wide
+prerequisite** — install them once, before the chart, whether you use the
+bundled gateway or bring your own:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
+kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
+```
+
+Without it the gateway comes up but its compute driver logs `no supported Agent
+Sandbox API version is available` and cannot create sandboxes. The chart does
+not bundle it: it is shared cluster infrastructure (a CRD + controller) whose
+lifecycle should not be tied to this release. If you install it *after* the
+gateway, restart the gateway so it re-detects the served API.
+
+### Chart
+
 One command installs a complete, working stack — gateway, OIDC issuer, and
 operator, already wired together:
 
