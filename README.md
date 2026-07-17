@@ -74,6 +74,20 @@ spec:
     - anthropic       # the OpenShellProvider above
   policyRef: restricted   # the OpenShellPolicy above, applied at creation
   gpu: false
+  gpuCount: 1             # GPUs to request when gpu is true (ignored otherwise)
+  logLevel: info          # sandbox-runtime log level
+  runtimeClassName: gvisor   # RuntimeClass requested from the compute platform
+  resources:              # cpu/memory for the sandbox pod (Kubernetes quantities)
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  labels:                 # applied to the sandbox's pod
+    team: platform
+  annotations:
+    example.com/owner: platform
   volumes:            # operator-provisioned, persists across recreation
     - name: work
       mountPath: /data
@@ -181,7 +195,8 @@ mounts a filesystem.
 ### Updates and recreation
 
 The gateway treats much of a sandbox's spec as immutable on a running sandbox.
-When you edit an **immutable** field — `image`, `environment`, `gpu`, the volume
+When you edit an **immutable** field — `image`, `environment`, `gpu`/`gpuCount`,
+`logLevel`, `runtimeClassName`, `resources`, `labels`, `annotations`, the volume
 mounts, or the resolved policy's `landlock`/`process` (from `spec.policy` or a
 referenced `OpenShellPolicy`) — the operator converges by **deleting and
 recreating the gateway sandbox**. It tracks the applied fields as a hash in
