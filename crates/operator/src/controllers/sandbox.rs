@@ -36,7 +36,10 @@ use openshell_sdk::raw::proto;
 use serde_json::json;
 use tracing::{info, warn};
 
-use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_event, record_failure};
+use super::{
+    Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, TRANSITIONAL_REQUEUE_INTERVAL,
+    record_event, record_failure,
+};
 use crate::crd::{
     OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
     OpenShellSandboxStatus, Phase, VolumeRetention,
@@ -144,16 +147,17 @@ async fn apply(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Acti
                     now,
                 ),
             );
+            let phase = map_phase(converged.state.phase);
             let status = OpenShellSandboxStatus {
                 conditions: current,
-                phase: Some(map_phase(converged.state.phase)),
+                phase: Some(phase),
                 sandbox_id: Some(converged.state.id),
                 applied_spec_hash: Some(converged.applied_spec_hash),
                 applied_policy_hash: Some(converged.applied_policy_hash),
                 observed_generation: generation,
             };
             patch_status(&ctx, &namespace, &name, &status).await?;
-            Ok(Action::requeue(REQUEUE_INTERVAL))
+            Ok(Action::requeue(success_requeue(phase)))
         }
         Err(err) => {
             record_failure(&ctx, sandbox.as_ref(), "Reconcile", &err).await;
@@ -612,6 +616,21 @@ async fn patch_status(
     Ok(())
 }
 
+/// Requeue cadence after a successful reconcile. `Ready` is the only steady
+/// phase, so it backs off to the drift-recheck cadence. Every other reachable
+/// phase can still change async on the gateway — `Provisioning` is still
+/// settling, and `Error` is not necessarily terminal (the gateway recomputes
+/// phase from pod status each sync and can recover `Error → Ready`) — so poll
+/// quickly to keep `.status.phase` fresh. (`Deleting` never reaches here; the
+/// cleanup path returns `await_change`.)
+fn success_requeue(phase: Phase) -> Duration {
+    if phase == Phase::Ready {
+        REQUEUE_INTERVAL
+    } else {
+        TRANSITIONAL_REQUEUE_INTERVAL
+    }
+}
+
 /// Map the gateway's phase onto the CR's coarse phase.
 fn map_phase(phase: SandboxPhase) -> Phase {
     match phase {
@@ -640,8 +659,9 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 #[cfg(test)]
 mod tests {
     use super::{
-        Phase, PolicySource, build_sandbox_create, hash_drifted, immutable_fingerprint, map_phase,
-        mutable_policy_fingerprint, provider_delta, references_policy, select_policy_source,
+        Phase, PolicySource, REQUEUE_INTERVAL, TRANSITIONAL_REQUEUE_INTERVAL, build_sandbox_create,
+        hash_drifted, immutable_fingerprint, map_phase, mutable_policy_fingerprint, provider_delta,
+        references_policy, select_policy_source, success_requeue,
     };
     use crate::crd::{
         FilesystemPolicy, LandlockPolicy, OpenShellPolicySpec, OpenShellSandbox,
@@ -753,6 +773,17 @@ mod tests {
         assert_eq!(map_phase(SandboxPhase::Provisioning), Phase::Provisioning);
         // Unspecified/unknown settle as provisioning.
         assert_eq!(map_phase(SandboxPhase::Unspecified), Phase::Provisioning);
+    }
+
+    #[test]
+    fn success_requeue_polls_faster_until_ready() {
+        // Ready is steady → drift cadence.
+        assert_eq!(success_requeue(Phase::Ready), REQUEUE_INTERVAL);
+        // Still-changeable phases → short poll so `.status.phase` catches up
+        // quickly. Error is included: the gateway can recover Error → Ready.
+        assert_eq!(success_requeue(Phase::Provisioning), TRANSITIONAL_REQUEUE_INTERVAL);
+        assert_eq!(success_requeue(Phase::Error), TRANSITIONAL_REQUEUE_INTERVAL);
+        assert!(TRANSITIONAL_REQUEUE_INTERVAL < REQUEUE_INTERVAL);
     }
 
     fn owned(names: &[&str]) -> Vec<String> {

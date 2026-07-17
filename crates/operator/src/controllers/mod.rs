@@ -23,6 +23,10 @@ pub mod sandbox;
 
 /// Requeue interval for a successful reconcile (drift re-check cadence).
 const REQUEUE_INTERVAL: Duration = Duration::from_secs(300);
+/// Requeue interval while a resource is still settling on the gateway (e.g. a
+/// sandbox in `Provisioning`). Short, so `.status` tracks async gateway
+/// transitions promptly instead of waiting out the full drift cadence.
+const TRANSITIONAL_REQUEUE_INTERVAL: Duration = Duration::from_secs(10);
 /// Requeue interval after a failed reconcile.
 const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(15);
 
