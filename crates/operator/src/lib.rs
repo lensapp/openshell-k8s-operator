@@ -19,6 +19,7 @@ pub mod controllers;
 pub mod crd;
 pub mod error;
 pub mod gateway;
+pub mod leader;
 pub mod policy;
 pub mod secret;
 pub mod volumes;

@@ -19,3 +19,7 @@
 {{-     fail (printf "openshellGateway.server.oidc.adminRole (%s) must match auth.oidc.adminRole (%s); override both together." $gw.adminRole .Values.auth.oidc.adminRole) }}
 {{-   end }}
 {{- end }}
+{{- /* Multiple replicas without leader election would double-run every reconcile loop. */ -}}
+{{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
+{{-   fail (printf "replicaCount=%d requires leaderElection.enabled=true: without election every replica reconciles at once. Set replicaCount=1 or enable leader election." (int .Values.replicaCount)) }}
+{{- end }}

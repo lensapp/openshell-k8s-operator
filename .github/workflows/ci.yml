@@ -40,9 +40,13 @@ jobs:
       - run: helm template test deploy/charts/openshell-operator --set gateway.bundled=false --set gateway.endpoint=http://gw:8080
       - run: helm template test deploy/charts/openshell-operator --set gateway.bundled=false --set gateway.endpoint=http://gw:8080 --set auth.mode=byo
       - run: helm template test deploy/charts/openshell-operator --set gateway.bundled=false --set operator.deployStandalone=false
-      # Guards must fail the render: bundled + byo, and bundled + no operator.
+      # HA: multiple replicas render only with leader election on.
+      - run: helm template test deploy/charts/openshell-operator --set replicaCount=3
+      # Guards must fail the render: bundled + byo, bundled + no operator, and
+      # multiple replicas without leader election.
       - run: "! helm template test deploy/charts/openshell-operator --set auth.mode=byo"
       - run: "! helm template test deploy/charts/openshell-operator --set operator.deployStandalone=false"
+      - run: "! helm template test deploy/charts/openshell-operator --set replicaCount=3 --set leaderElection.enabled=false"
 
   docker:
     runs-on: ubuntu-latest

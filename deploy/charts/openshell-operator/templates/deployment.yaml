@@ -9,9 +9,10 @@ metadata:
   labels:
     {{- include "openshell-operator.labels" . | nindent 4 }}
 spec:
-  # Single replica: the operator has no leader election yet, so more than one
-  # would double-run every reconcile loop.
-  replicas: 1
+  # More than one replica is safe only with leader election on: the standbys
+  # sit idle until the lease-holder dies. The validation template enforces that
+  # pairing, so replicaCount > 1 without leaderElection.enabled fails the render.
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       {{- include "openshell-operator.selectorLabels" . | nindent 6 }}
@@ -38,6 +39,21 @@ spec:
           env:
             - name: OPENSHELL_GATEWAY_ENDPOINT
               value: {{ include "openshell-operator.gatewayEndpoint" . | quote }}
+            {{- if .Values.leaderElection.enabled }}
+            # Leader election: pod name is the holder identity, namespace scopes
+            # the Lease, and the lease name (set only here) switches election on
+            # in the operator — absent, it runs the controllers directly.
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPENSHELL_LEADER_ELECTION_LEASE
+              value: {{ include "openshell-operator.fullname" . | quote }}
+            {{- end }}
             {{- if $token }}
             - name: OPENSHELL_TOKEN_FILE
               value: /var/run/openshell/token/token

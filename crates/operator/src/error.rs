@@ -116,6 +116,13 @@ pub enum Error {
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),
+
+    /// This replica held leadership and then lost the lease (a peer took over,
+    /// or renewal failed past the lease duration). The process must exit so
+    /// Kubernetes restarts it as a standby rather than running two active
+    /// operators against one gateway.
+    #[error("lost leadership: {0}")]
+    LeadershipLost(&'static str),
 }
 
 impl Error {
@@ -138,6 +145,7 @@ impl Error {
             Self::VolumeInvalid(_) => "VolumeInvalid",
             Self::RecreateTimeout { .. } => "RecreateTimeout",
             Self::Finalizer(_) => "FinalizerError",
+            Self::LeadershipLost(_) => "LeadershipLost",
         }
     }
 

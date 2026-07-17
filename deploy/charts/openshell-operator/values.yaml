@@ -22,6 +22,19 @@ operator:
   # container in another chart. The bundled issuer is skipped in that case.
   deployStandalone: true
 
+# Number of operator replicas. Keep at 1 unless leaderElection.enabled is true —
+# without election, extra replicas would all reconcile at once. With election on,
+# the surplus replicas stand by and take over only if the leader fails.
+replicaCount: 1
+
+# Leader election. When enabled, replicas contend for a coordination.k8s.io Lease
+# and only the holder runs the controllers; the rest wait as warm standbys. On by
+# default so scaling replicaCount up is safe out of the box — and even at a single
+# replica it prevents the old and new pods from both reconciling during the
+# maxSurge overlap of a rolling update, at negligible cost.
+leaderElection:
+  enabled: true
+
 gateway:
   # Bundle the OpenShell gateway with this release (the batteries-included
   # default: one helm install brings up gateway + issuer + operator). Set false

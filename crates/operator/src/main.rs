@@ -10,8 +10,8 @@ use kube::Client;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, prelude::*};
 
-use openshell_operator::controllers;
 use openshell_operator::gateway::{GatewayConfig, SdkGateway};
+use openshell_operator::{controllers, leader};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,8 +29,17 @@ async fn main() -> anyhow::Result<()> {
     let gateway = Arc::new(SdkGateway::connect(config).await?);
 
     let kube = Client::try_default().await?;
-    info!("starting controllers");
-    controllers::run(kube, gateway).await?;
+
+    // With leader election configured, only the replica holding the lease runs
+    // the controllers; losing it returns an error so this process exits and
+    // Kubernetes restarts it as a standby. Unconfigured (a bare `cargo run` or a
+    // single-replica install), run the controllers directly.
+    if let Some(election) = leader::Config::from_env() {
+        leader::run(kube.clone(), election, || controllers::run(kube, gateway)).await?;
+    } else {
+        info!("leader election not configured; starting controllers");
+        controllers::run(kube, gateway).await?;
+    }
 
     Ok(())
 }
