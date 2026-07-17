@@ -53,6 +53,8 @@ pub struct SandboxCreate {
     pub providers: Vec<String>,
     /// Request a GPU.
     pub gpu: bool,
+    /// Number of GPUs when `gpu` is set; `None` uses the driver default.
+    pub gpu_count: Option<u32>,
     /// Resolved sandbox policy, already validated by the caller. `None` leaves
     /// the gateway to apply its default policy.
     pub policy: Option<proto::SandboxPolicy>,
@@ -60,6 +62,17 @@ pub struct SandboxCreate {
     /// `None`. Passed through to the sandbox template verbatim; the gateway
     /// forwards the block matching the active compute driver.
     pub driver_config: Option<serde_json::Value>,
+    /// Sandbox-runtime log level, or `None` for the gateway default.
+    pub log_level: Option<String>,
+    /// Compute resources in the Kubernetes `requests`/`limits` JSON shape, or
+    /// `None`. Forwarded to the sandbox template's `resources`.
+    pub resources: Option<serde_json::Value>,
+    /// `RuntimeClass` name, or `None` for the platform default.
+    pub runtime_class_name: Option<String>,
+    /// Labels applied to the sandbox's compute-platform resources.
+    pub labels: BTreeMap<String, String>,
+    /// Annotations applied to the sandbox's compute-platform resources.
+    pub annotations: BTreeMap<String, String>,
 }
 
 /// Resolved provider desired state handed to the gateway. Credentials are
@@ -370,30 +383,47 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
         environment,
         providers,
         gpu,
+        gpu_count,
         policy,
         driver_config,
+        log_level,
+        resources,
+        runtime_class_name,
+        labels,
+        annotations,
     } = create;
 
-    // A template is needed when either the image or the driver_config is set;
-    // both live on it. An empty image string defers to the gateway default.
+    // A template is needed once any template-level field is set. An empty image
+    // string defers to the gateway default.
     let driver_config = driver_config.map(json_value_to_struct);
-    let template = (image.is_some() || driver_config.is_some()).then(|| proto::SandboxTemplate {
+    let resources = resources.map(json_value_to_struct);
+    let needs_template = image.is_some()
+        || driver_config.is_some()
+        || resources.is_some()
+        || runtime_class_name.is_some()
+        || !labels.is_empty()
+        || !annotations.is_empty();
+    let template = needs_template.then(|| proto::SandboxTemplate {
         image: image.unwrap_or_default(),
+        runtime_class_name: runtime_class_name.unwrap_or_default(),
+        labels: labels.into_iter().collect(),
+        annotations: annotations.into_iter().collect(),
+        resources,
         driver_config,
         ..proto::SandboxTemplate::default()
     });
     let resource_requirements = gpu.then_some(proto::ResourceRequirements {
-        gpu: Some(proto::GpuResourceRequirements { count: None }),
+        gpu: Some(proto::GpuResourceRequirements { count: gpu_count }),
     });
 
     CreateSandboxRequest {
         spec: Some(proto::SandboxSpec {
+            log_level: log_level.unwrap_or_default(),
             environment: environment.into_iter().collect(),
             template,
             policy,
             providers,
             resource_requirements,
-            ..proto::SandboxSpec::default()
         }),
         name,
         labels: HashMap::new(),
@@ -487,5 +517,36 @@ mod tests {
             .and_then(|spec| spec.template)
             .expect("template present when driver_config set");
         assert!(template.driver_config.is_some());
+    }
+
+    #[test]
+    fn create_request_carries_new_primitives() {
+        let create = SandboxCreate {
+            name: "box".to_owned(),
+            gpu: true,
+            gpu_count: Some(3),
+            log_level: Some("debug".to_owned()),
+            runtime_class_name: Some("gvisor".to_owned()),
+            labels: std::collections::BTreeMap::from([("team".to_owned(), "core".to_owned())]),
+            annotations: std::collections::BTreeMap::from([("k".to_owned(), "v".to_owned())]),
+            resources: Some(json!({ "requests": { "cpu": "500m" } })),
+            ..SandboxCreate::default()
+        };
+        let spec = create_sandbox_request(create).spec.expect("spec present");
+        assert_eq!(spec.log_level, "debug");
+        assert_eq!(
+            spec.resource_requirements
+                .and_then(|r| r.gpu)
+                .and_then(|g| g.count),
+            Some(3)
+        );
+        let template = spec.template.expect("template present");
+        assert_eq!(template.runtime_class_name, "gvisor");
+        assert_eq!(
+            template.labels.get("team").map(String::as_str),
+            Some("core")
+        );
+        assert_eq!(template.annotations.get("k").map(String::as_str), Some("v"));
+        assert!(template.resources.is_some());
     }
 }

@@ -40,6 +40,11 @@ spec:
 
               The sandbox's policy is applied at creation time and may be given either inline via `policy` or by reference via `policyRef` (naming an `OpenShellPolicy` in the same namespace) — at most one of the two. Gateway selection, entrypoint, and TTL/cleanup arrive in later milestones.
             properties:
+              annotations:
+                additionalProperties:
+                  type: string
+                description: Annotations applied to the sandbox's compute-platform resources (its pod). Immutable on a running sandbox — a change recreates it.
+                type: object
               environment:
                 additionalProperties:
                   type: string
@@ -49,8 +54,23 @@ spec:
                 default: false
                 description: Request a GPU for the sandbox.
                 type: boolean
+              gpuCount:
+                description: Number of GPUs to request when `gpu` is set. `None` uses the driver's default (a single GPU). Ignored when `gpu` is false. Immutable on a running sandbox — a change recreates it.
+                format: uint32
+                minimum: 0.0
+                nullable: true
+                type: integer
               image:
                 description: Container image the sandbox runs. Empty defers to the gateway default.
+                nullable: true
+                type: string
+              labels:
+                additionalProperties:
+                  type: string
+                description: Labels applied to the sandbox's compute-platform resources (its pod). Immutable on a running sandbox — a change recreates it.
+                type: object
+              logLevel:
+                description: Sandbox-runtime log level exposed to processes inside the sandbox (e.g. `info`, `debug`). Empty defers to the gateway default. Immutable on a running sandbox — a change recreates it.
                 nullable: true
                 type: string
               policy:
@@ -116,6 +136,41 @@ spec:
                 items:
                   type: string
                 type: array
+              resources:
+                description: Compute resource requests and limits for the sandbox pod, as Kubernetes quantity strings (cpu e.g. `500m`/`2`, memory e.g. `256Mi`/`4Gi`). Immutable on a running sandbox — a change recreates it.
+                nullable: true
+                properties:
+                  limits:
+                    description: Maximum resources the sandbox may consume.
+                    nullable: true
+                    properties:
+                      cpu:
+                        description: CPU quantity (e.g. `500m`, `2`).
+                        nullable: true
+                        type: string
+                      memory:
+                        description: Memory quantity (e.g. `256Mi`, `4Gi`).
+                        nullable: true
+                        type: string
+                    type: object
+                  requests:
+                    description: Minimum resources guaranteed to the sandbox.
+                    nullable: true
+                    properties:
+                      cpu:
+                        description: CPU quantity (e.g. `500m`, `2`).
+                        nullable: true
+                        type: string
+                      memory:
+                        description: Memory quantity (e.g. `256Mi`, `4Gi`).
+                        nullable: true
+                        type: string
+                    type: object
+                type: object
+              runtimeClassName:
+                description: '`RuntimeClass` requested from the compute platform (e.g. `gvisor`, `kata`). Empty uses the platform default. Immutable on a running sandbox — a change recreates it.'
+                nullable: true
+                type: string
               volumeRetention:
                 default: Retain
                 description: What happens to the provisioned `volumes` when this `OpenShellSandbox` is deleted. Volumes are always kept across gateway-side recreation; this setting only governs deletion of the resource itself.

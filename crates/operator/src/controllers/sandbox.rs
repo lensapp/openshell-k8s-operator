@@ -42,7 +42,7 @@ use super::{
 };
 use crate::crd::{
     OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
-    OpenShellSandboxStatus, Phase, VolumeRetention,
+    OpenShellSandboxStatus, Phase, ResourceQuantities, SandboxResources, VolumeRetention,
 };
 use crate::error::{Error, Result};
 use crate::gateway::{SandboxCreate, SandboxState};
@@ -474,20 +474,59 @@ fn immutable_fingerprint(
     spec: &OpenShellSandboxSpec,
     policy: Option<&OpenShellPolicySpec>,
 ) -> String {
-    let material = json!({
-        "image": spec.image,
-        "environment": spec.environment,
-        "gpu": spec.gpu,
-        "landlock": policy.and_then(|policy| policy.landlock.as_ref()),
-        "process": policy.and_then(|policy| policy.process.as_ref()),
-        "volumes": spec.volumes.iter().map(|volume| json!({
-            "name": volume.name,
-            "mountPath": volume.mount_path,
-            "subPath": volume.sub_path,
-            "readOnly": volume.read_only,
-        })).collect::<Vec<_>>(),
-    });
-    hash_material(&material)
+    let mut material = serde_json::Map::new();
+    material.insert("image".to_owned(), json!(spec.image));
+    material.insert("environment".to_owned(), json!(spec.environment));
+    material.insert("gpu".to_owned(), json!(spec.gpu));
+    material.insert(
+        "landlock".to_owned(),
+        json!(policy.and_then(|policy| policy.landlock.as_ref())),
+    );
+    material.insert(
+        "process".to_owned(),
+        json!(policy.and_then(|policy| policy.process.as_ref())),
+    );
+    material.insert(
+        "volumes".to_owned(),
+        json!(
+            spec.volumes
+                .iter()
+                .map(|volume| json!({
+                    "name": volume.name,
+                    "mountPath": volume.mount_path,
+                    "subPath": volume.sub_path,
+                    "readOnly": volume.read_only,
+                }))
+                .collect::<Vec<_>>()
+        ),
+    );
+
+    // Fields added after the initial schema are folded in only when set, so a
+    // sandbox created before they existed keeps its original hash and is not
+    // needlessly recreated on operator upgrade. Use the *normalized* values the
+    // gateway actually receives (see `build_sandbox_create`) — a gpu count with
+    // no GPU, or present-but-empty resources, is dropped there and so must not
+    // move the hash either, or it would trigger a recreate that changes nothing.
+    if let Some(count) = spec.gpu.then_some(spec.gpu_count).flatten() {
+        material.insert("gpuCount".to_owned(), json!(count));
+    }
+    if let Some(log_level) = &spec.log_level {
+        material.insert("logLevel".to_owned(), json!(log_level));
+    }
+    if let Some(resources) = resources_json(spec.resources.as_ref()) {
+        material.insert("resources".to_owned(), json!(resources));
+    }
+    if let Some(runtime_class) = &spec.runtime_class_name {
+        material.insert("runtimeClassName".to_owned(), json!(runtime_class));
+    }
+    if !spec.labels.is_empty() {
+        material.insert("labels".to_owned(), json!(spec.labels));
+    }
+    if !spec.annotations.is_empty() {
+        material.insert("annotations".to_owned(), json!(spec.annotations));
+    }
+
+    hash_material(&serde_json::Value::Object(material))
 }
 
 /// Fingerprint of the policy fields that are mutable on a live gateway sandbox.
@@ -595,9 +634,30 @@ fn build_sandbox_create(
         environment: spec.environment.clone(),
         providers: spec.providers.clone(),
         gpu: spec.gpu,
+        gpu_count: spec.gpu_count,
         policy,
         driver_config: volumes::driver_config_json(name, &spec.volumes),
+        log_level: spec.log_level.clone(),
+        resources: resources_json(spec.resources.as_ref()),
+        runtime_class_name: spec.runtime_class_name.clone(),
+        labels: spec.labels.clone(),
+        annotations: spec.annotations.clone(),
     }
+}
+
+/// Shape the CR's `resources` into the gateway's `requests`/`limits` JSON Struct,
+/// or `None` when no quantity is actually set (so it never forces an empty
+/// template). The keys mirror what the gateway parses back into typed driver
+/// resource requirements.
+fn resources_json(resources: Option<&SandboxResources>) -> Option<serde_json::Value> {
+    let resources = resources?;
+    let has_quantity = |section: Option<&ResourceQuantities>| {
+        section.is_some_and(|q| q.cpu.is_some() || q.memory.is_some())
+    };
+    if !has_quantity(resources.requests.as_ref()) && !has_quantity(resources.limits.as_ref()) {
+        return None;
+    }
+    serde_json::to_value(resources).ok()
 }
 
 /// Create the PVC for each volume that does not yet exist. Existing PVCs are
@@ -717,12 +777,13 @@ fn error_policy(_sandbox: Arc<OpenShellSandbox>, err: &Error, _ctx: Arc<Context>
 mod tests {
     use super::{
         Phase, PolicySource, REQUEUE_INTERVAL, TRANSITIONAL_REQUEUE_INTERVAL, build_sandbox_create,
-        hash_drifted, immutable_fingerprint, map_phase, mutable_policy_fingerprint, provider_delta,
-        references_policy, select_policy_source, success_requeue,
+        hash_drifted, hash_material, immutable_fingerprint, map_phase, mutable_policy_fingerprint,
+        provider_delta, references_policy, resources_json, select_policy_source, success_requeue,
     };
     use crate::crd::{
         FilesystemPolicy, LandlockPolicy, OpenShellPolicySpec, OpenShellSandbox,
-        OpenShellSandboxSpec, PreservedValue, ProcessPolicy, SandboxVolume,
+        OpenShellSandboxSpec, PreservedValue, ProcessPolicy, ResourceQuantities, SandboxResources,
+        SandboxVolume,
     };
     use crate::error::Error;
     use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
@@ -780,6 +841,158 @@ mod tests {
         };
         let create = build_sandbox_create("named", &sample_spec(), Some(policy));
         assert_eq!(create.policy.expect("policy present").version, 1);
+    }
+
+    fn spec_with_primitives() -> OpenShellSandboxSpec {
+        OpenShellSandboxSpec {
+            gpu: true,
+            gpu_count: Some(2),
+            log_level: Some("debug".to_owned()),
+            runtime_class_name: Some("gvisor".to_owned()),
+            labels: std::collections::BTreeMap::from([("team".to_owned(), "core".to_owned())]),
+            annotations: std::collections::BTreeMap::from([("note".to_owned(), "x".to_owned())]),
+            resources: Some(SandboxResources {
+                requests: Some(ResourceQuantities {
+                    cpu: Some("500m".to_owned()),
+                    memory: Some("256Mi".to_owned()),
+                }),
+                limits: Some(ResourceQuantities {
+                    cpu: Some("2".to_owned()),
+                    memory: None,
+                }),
+            }),
+            ..OpenShellSandboxSpec::default()
+        }
+    }
+
+    #[test]
+    fn build_sandbox_create_maps_new_primitives() {
+        let create = build_sandbox_create("named", &spec_with_primitives(), None);
+        assert_eq!(create.gpu_count, Some(2));
+        assert_eq!(create.log_level.as_deref(), Some("debug"));
+        assert_eq!(create.runtime_class_name.as_deref(), Some("gvisor"));
+        assert_eq!(create.labels.get("team").map(String::as_str), Some("core"));
+        assert_eq!(
+            create.annotations.get("note").map(String::as_str),
+            Some("x")
+        );
+        let resources = create.resources.expect("resources present");
+        assert_eq!(resources["requests"]["cpu"], "500m");
+        assert_eq!(resources["requests"]["memory"], "256Mi");
+        assert_eq!(resources["limits"]["cpu"], "2");
+    }
+
+    #[test]
+    fn resources_json_none_when_no_quantities() {
+        // Present-but-empty resources must not force an (empty) template.
+        assert!(resources_json(None).is_none());
+        let empty = SandboxResources {
+            requests: Some(ResourceQuantities::default()),
+            limits: None,
+        };
+        assert!(resources_json(Some(&empty)).is_none());
+    }
+
+    #[test]
+    fn new_primitives_drift_forces_recreate() {
+        // Each new immutable field, once set, changes the fingerprint so the
+        // reconciler recreates the sandbox on a change.
+        let base = immutable_fingerprint(&OpenShellSandboxSpec::default(), None);
+        let mutate = |f: fn(&mut OpenShellSandboxSpec)| {
+            let mut spec = OpenShellSandboxSpec::default();
+            f(&mut spec);
+            immutable_fingerprint(&spec, None)
+        };
+        // gpuCount only counts once a GPU is requested (it is dropped otherwise),
+        // so compare against a GPU-enabled baseline.
+        let gpu_on = immutable_fingerprint(
+            &OpenShellSandboxSpec {
+                gpu: true,
+                ..OpenShellSandboxSpec::default()
+            },
+            None,
+        );
+        let gpu_counted = immutable_fingerprint(
+            &OpenShellSandboxSpec {
+                gpu: true,
+                gpu_count: Some(1),
+                ..OpenShellSandboxSpec::default()
+            },
+            None,
+        );
+        assert_ne!(gpu_on, gpu_counted);
+        assert_ne!(base, mutate(|s| s.log_level = Some("debug".to_owned())));
+        assert_ne!(
+            base,
+            mutate(|s| s.runtime_class_name = Some("kata".to_owned()))
+        );
+        assert_ne!(
+            base,
+            mutate(
+                |s| s.labels = std::collections::BTreeMap::from([("a".to_owned(), "b".to_owned())])
+            )
+        );
+        assert_ne!(
+            base,
+            mutate(|s| s.annotations =
+                std::collections::BTreeMap::from([("a".to_owned(), "b".to_owned())]))
+        );
+        assert_ne!(
+            base,
+            mutate(|s| s.resources = Some(SandboxResources {
+                requests: Some(ResourceQuantities {
+                    cpu: Some("1".to_owned()),
+                    memory: None,
+                }),
+                limits: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn fingerprint_unchanged_for_pre_primitives_specs() {
+        // Upgrade safety: a spec using only the original fields must hash exactly
+        // as the operator did before these primitives existed, so upgrading does
+        // not needlessly recreate running sandboxes. This reconstructs the legacy
+        // material and asserts the current fingerprint matches it.
+        let spec = OpenShellSandboxSpec {
+            image: Some("img".to_owned()),
+            gpu: true,
+            ..OpenShellSandboxSpec::default()
+        };
+        let legacy = serde_json::json!({
+            "image": spec.image,
+            "environment": spec.environment,
+            "gpu": spec.gpu,
+            "landlock": Option::<()>::None,
+            "process": Option::<()>::None,
+            "volumes": Vec::<serde_json::Value>::new(),
+        });
+        assert_eq!(immutable_fingerprint(&spec, None), hash_material(&legacy));
+    }
+
+    #[test]
+    fn normalized_primitives_do_not_drift_fingerprint() {
+        // Values the gateway drops in `build_sandbox_create` must not move the
+        // hash, or they'd force a recreate that sends nothing new: a gpu count
+        // with no GPU, and present-but-empty resources.
+        let base = immutable_fingerprint(&OpenShellSandboxSpec::default(), None);
+
+        let gpu_count_without_gpu = OpenShellSandboxSpec {
+            gpu: false,
+            gpu_count: Some(4),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert_eq!(base, immutable_fingerprint(&gpu_count_without_gpu, None));
+
+        let empty_resources = OpenShellSandboxSpec {
+            resources: Some(SandboxResources {
+                requests: Some(ResourceQuantities::default()),
+                limits: None,
+            }),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert_eq!(base, immutable_fingerprint(&empty_resources, None));
     }
 
     #[test]

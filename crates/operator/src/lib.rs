@@ -28,7 +28,7 @@ pub mod volumes;
 pub use crd::{
     FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,
     OpenShellProvider, OpenShellProviderSpec, OpenShellProviderStatus, OpenShellSandbox,
-    OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy, SandboxVolume, SecretRef,
-    VolumeRetention,
+    OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy, ResourceQuantities,
+    SandboxResources, SandboxVolume, SecretRef, VolumeRetention,
 };
 pub use error::{Error, Result};

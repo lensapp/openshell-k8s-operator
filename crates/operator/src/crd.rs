@@ -54,6 +54,12 @@ pub struct OpenShellSandboxSpec {
     #[serde(default)]
     pub gpu: bool,
 
+    /// Number of GPUs to request when `gpu` is set. `None` uses the driver's
+    /// default (a single GPU). Ignored when `gpu` is false. Immutable on a
+    /// running sandbox — a change recreates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_count: Option<u32>,
+
     /// Inline policy document applied at create. Mutually exclusive with
     /// `policyRef`. Use this for a one-off, self-contained sandbox; use
     /// `policyRef` to share a reusable, pre-validated policy across sandboxes.
@@ -78,6 +84,62 @@ pub struct OpenShellSandboxSpec {
     /// setting only governs deletion of the resource itself.
     #[serde(default)]
     pub volume_retention: VolumeRetention,
+
+    /// Sandbox-runtime log level exposed to processes inside the sandbox (e.g.
+    /// `info`, `debug`). Empty defers to the gateway default. Immutable on a
+    /// running sandbox — a change recreates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+
+    /// Compute resource requests and limits for the sandbox pod, as Kubernetes
+    /// quantity strings (cpu e.g. `500m`/`2`, memory e.g. `256Mi`/`4Gi`).
+    /// Immutable on a running sandbox — a change recreates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<SandboxResources>,
+
+    /// `RuntimeClass` requested from the compute platform (e.g. `gvisor`,
+    /// `kata`). Empty uses the platform default. Immutable on a running sandbox —
+    /// a change recreates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_class_name: Option<String>,
+
+    /// Labels applied to the sandbox's compute-platform resources (its pod).
+    /// Immutable on a running sandbox — a change recreates it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+
+    /// Annotations applied to the sandbox's compute-platform resources (its
+    /// pod). Immutable on a running sandbox — a change recreates it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annotations: BTreeMap<String, String>,
+}
+
+/// Compute resource requests and limits for a sandbox pod, mirroring the
+/// Kubernetes `requests`/`limits` shape. Values are quantity strings, forwarded
+/// to the gateway's compute driver.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxResources {
+    /// Minimum resources guaranteed to the sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requests: Option<ResourceQuantities>,
+
+    /// Maximum resources the sandbox may consume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<ResourceQuantities>,
+}
+
+/// CPU and memory quantities as Kubernetes quantity strings (e.g. `500m`, `4Gi`).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceQuantities {
+    /// CPU quantity (e.g. `500m`, `2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<String>,
+
+    /// Memory quantity (e.g. `256Mi`, `4Gi`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
 }
 
 /// A persistent volume the operator provisions, owns, and mounts into a sandbox.
