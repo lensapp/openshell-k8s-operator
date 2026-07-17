@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
 description = "Kubernetes operator providing declarative CRDs over the OpenShell gateway"
-repository = "https://github.com/lenshq/openshell-k8s-operator"
+repository = "https://github.com/lensapp/openshell-k8s-operator"
 
 [[bin]]
 name = "openshell-operator"

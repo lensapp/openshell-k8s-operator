@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.90"
 license = "Apache-2.0"
 description = "Static OIDC issuer that mints the operator's gateway bearer and serves its JWKS"
-repository = "https://github.com/lenshq/openshell-k8s-operator"
+repository = "https://github.com/lensapp/openshell-k8s-operator"
 
 [[bin]]
 name = "openshell-issuer"

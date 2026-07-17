@@ -7,9 +7,9 @@ version: 0.1.0
 # Operator image version this chart defaults to.
 appVersion: "0.1.0"
 kubeVersion: ">=1.25.0-0"
-home: https://github.com/lenshq/openshell-k8s-operator
+home: https://github.com/lensapp/openshell-k8s-operator
 sources:
-  - https://github.com/lenshq/openshell-k8s-operator
+  - https://github.com/lensapp/openshell-k8s-operator
 dependencies:
   # The OpenShell gateway itself, bundled by default so a single `helm install`
   # stands up gateway + issuer + operator. Disabled with gateway.bundled=false

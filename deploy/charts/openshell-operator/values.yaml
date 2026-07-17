@@ -1,7 +1,7 @@
 # Default values for openshell-operator.
 
 image:
-  repository: ghcr.io/lenshq/openshell-operator
+  repository: ghcr.io/lensapp/openshell-operator
   # Defaults to the chart's appVersion when left empty.
   tag: ""
   pullPolicy: IfNotPresent
@@ -74,7 +74,7 @@ auth:
 
   # The bundled issuer image (mint + serve share one binary).
   issuer:
-    repository: ghcr.io/lenshq/openshell-issuer
+    repository: ghcr.io/lensapp/openshell-issuer
     tag: ""
     pullPolicy: IfNotPresent
     resources:
