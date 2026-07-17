@@ -37,8 +37,8 @@ use serde_json::json;
 use tracing::{info, warn};
 
 use super::{
-    Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, TRANSITIONAL_REQUEUE_INTERVAL,
-    record_event, record_failure,
+    Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, TRANSITIONAL_REQUEUE_INTERVAL, record_event,
+    record_failure,
 };
 use crate::crd::{
     OpenShellPolicy, OpenShellPolicySpec, OpenShellSandbox, OpenShellSandboxSpec,
@@ -781,7 +781,10 @@ mod tests {
         assert_eq!(success_requeue(Phase::Ready), REQUEUE_INTERVAL);
         // Still-changeable phases → short poll so `.status.phase` catches up
         // quickly. Error is included: the gateway can recover Error → Ready.
-        assert_eq!(success_requeue(Phase::Provisioning), TRANSITIONAL_REQUEUE_INTERVAL);
+        assert_eq!(
+            success_requeue(Phase::Provisioning),
+            TRANSITIONAL_REQUEUE_INTERVAL
+        );
         assert_eq!(success_requeue(Phase::Error), TRANSITIONAL_REQUEUE_INTERVAL);
         assert!(TRANSITIONAL_REQUEUE_INTERVAL < REQUEUE_INTERVAL);
     }
