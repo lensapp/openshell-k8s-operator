@@ -1,0 +1,7 @@
+# Pin the toolchain to the project's MSRV so local builds, the pre-commit hook,
+# and CI all run the same rustc/clippy/rustfmt. Clippy's lints (notably nursery
+# lints like cognitive_complexity) drift between versions, so an unpinned newer
+# toolchain can pass locally yet fail CI. CI installs this same version.
+[toolchain]
+channel = "1.90"
+components = ["rustfmt", "clippy"]

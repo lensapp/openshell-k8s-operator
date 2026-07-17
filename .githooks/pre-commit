@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-commit gate mirroring CI (.github/workflows/ci.yml): reject a commit that
+# CI would fail on for formatting or clippy. Both use the strict flags that
+# plain `cargo fmt` / `cargo clippy` skip locally, which is why a "clean" commit
+# can still break CI. Bypass with `git commit --no-verify` when you must.
+set -e
+
+echo "pre-commit: cargo fmt --all --check"
+cargo fmt --all --check
+
+echo "pre-commit: cargo clippy --all-targets -- -D warnings"
+cargo clippy --all-targets -- -D warnings

@@ -321,6 +321,18 @@ cargo run --bin crdgen > deploy/charts/openshell-operator/files/crds.yaml
 cargo run --bin openshell-operator
 ```
 
+The toolchain is pinned to the project's MSRV (`rust-toolchain.toml`, mirrored in
+`mise.toml` for mise users) so local `clippy`/`fmt` match CI — nursery lints like
+`cognitive_complexity` drift between compiler versions, so an unpinned newer
+toolchain can pass locally yet fail CI.
+
+Enable the git hooks once per clone to run the CI `fmt` + `clippy` gate before
+each commit (`core.hooksPath` is not stored in the repo):
+
+```bash
+git config core.hooksPath .githooks
+```
+
 `openshell-sdk` and `openshell-core` are consumed as git dependencies pinned to
 an exact revision of NVIDIA/OpenShell `main`.
 

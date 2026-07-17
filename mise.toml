@@ -1,0 +1,6 @@
+# Repo-local mise config. mise exports RUSTUP_TOOLCHAIN, which overrides
+# rust-toolchain.toml, so mise users need the pin here too — otherwise a newer
+# global mise rust (e.g. "latest") shadows the project MSRV and clippy drifts
+# from CI. Keep this version in sync with rust-toolchain.toml and CI (1.90).
+[tools]
+rust = "1.90"
