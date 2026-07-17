@@ -253,13 +253,7 @@ async fn converge(
     let Some(existing) = existing else {
         // No sandbox yet: resolution errors are fatal — we cannot create the
         // sandbox without a valid policy.
-        let resolved = resolved?;
-        let state = create(ctx, name, sandbox, resolved.proto).await?;
-        return Ok(Converged {
-            state,
-            applied_spec_hash: immutable_fingerprint(&sandbox.spec, resolved.spec.as_ref()),
-            applied_policy_hash: mutable_policy_fingerprint(resolved.spec.as_ref()),
-        });
+        return create_converged(ctx, name, sandbox, resolved?).await;
     };
 
     // A missing/invalid policy must not tear down a running sandbox, but it is
@@ -277,30 +271,87 @@ async fn converge(
 
     let desired_spec_hash = immutable_fingerprint(&sandbox.spec, resolved.spec.as_ref());
     if hash_drifted(prior_spec_hash.as_deref(), &desired_spec_hash) {
-        warn!(%name, "immutable spec drift; recreating gateway sandbox");
-        record_event(
-            ctx,
-            sandbox,
-            EventType::Normal,
-            "Recreating",
-            "Recreate",
-            "immutable field changed; deleting and recreating the gateway sandbox (operator-owned volumes are preserved)".to_owned(),
-        )
-        .await;
-        let state = recreate(ctx, name, sandbox, resolved.proto).await?;
-        return Ok(Converged {
-            state,
-            applied_spec_hash: desired_spec_hash,
-            applied_policy_hash: mutable_policy_fingerprint(resolved.spec.as_ref()),
-        });
+        return recreate_converged(ctx, name, sandbox, resolved, desired_spec_hash).await;
     }
 
     // In-place convergence: providers first, then the policy's mutable fields.
     converge_providers(ctx, name, &sandbox.spec.providers, &existing).await?;
 
     let desired_policy_hash = mutable_policy_fingerprint(resolved.spec.as_ref());
-    if let Some(policy) = resolved.proto
-        && hash_drifted(prior_policy_hash.as_deref(), &desired_policy_hash)
+    update_policy_if_drifted(
+        ctx,
+        name,
+        sandbox,
+        resolved.proto,
+        prior_policy_hash.as_deref(),
+        &desired_policy_hash,
+    )
+    .await?;
+
+    Ok(Converged {
+        state: existing,
+        applied_spec_hash: desired_spec_hash,
+        applied_policy_hash: desired_policy_hash,
+    })
+}
+
+/// Create a not-yet-existing gateway sandbox and package the hashes to record.
+async fn create_converged(
+    ctx: &Context,
+    name: &str,
+    sandbox: &OpenShellSandbox,
+    resolved: ResolvedPolicy,
+) -> Result<Converged> {
+    let applied_spec_hash = immutable_fingerprint(&sandbox.spec, resolved.spec.as_ref());
+    let applied_policy_hash = mutable_policy_fingerprint(resolved.spec.as_ref());
+    let state = create(ctx, name, sandbox, resolved.proto).await?;
+    Ok(Converged {
+        state,
+        applied_spec_hash,
+        applied_policy_hash,
+    })
+}
+
+/// Recreate a sandbox whose immutable fields drifted, announce it, and package
+/// the hashes to record. Operator-owned volumes survive the recreate.
+async fn recreate_converged(
+    ctx: &Context,
+    name: &str,
+    sandbox: &OpenShellSandbox,
+    resolved: ResolvedPolicy,
+    desired_spec_hash: String,
+) -> Result<Converged> {
+    warn!(%name, "immutable spec drift; recreating gateway sandbox");
+    record_event(
+        ctx,
+        sandbox,
+        EventType::Normal,
+        "Recreating",
+        "Recreate",
+        "immutable field changed; deleting and recreating the gateway sandbox (operator-owned volumes are preserved)".to_owned(),
+    )
+    .await;
+    let applied_policy_hash = mutable_policy_fingerprint(resolved.spec.as_ref());
+    let state = recreate(ctx, name, sandbox, resolved.proto).await?;
+    Ok(Converged {
+        state,
+        applied_spec_hash: desired_spec_hash,
+        applied_policy_hash,
+    })
+}
+
+/// Push the policy's mutable fields (`networkPolicies`, additive `filesystem`)
+/// to the live sandbox in place when they drift.
+async fn update_policy_if_drifted(
+    ctx: &Context,
+    name: &str,
+    sandbox: &OpenShellSandbox,
+    policy: Option<proto::SandboxPolicy>,
+    prior_policy_hash: Option<&str>,
+    desired_policy_hash: &str,
+) -> Result<()> {
+    if let Some(policy) = policy
+        && hash_drifted(prior_policy_hash, desired_policy_hash)
     {
         info!(%name, "policy mutable fields drifted; updating in place");
         record_event(
@@ -315,12 +366,7 @@ async fn converge(
         .await;
         ctx.gateway.update_policy(name, policy).await?;
     }
-
-    Ok(Converged {
-        state: existing,
-        applied_spec_hash: desired_spec_hash,
-        applied_policy_hash: desired_policy_hash,
-    })
+    Ok(())
 }
 
 /// Converge the sandbox's attached providers toward `desired`, attaching those
@@ -588,17 +634,28 @@ async fn cleanup(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Ac
     }
 
     if sandbox.spec.volume_retention == VolumeRetention::Delete {
-        let namespace = sandbox.namespace().ok_or(Error::MissingNamespace)?;
-        info!(%name, "deleting provisioned sandbox volumes");
-        let api: Api<PersistentVolumeClaim> = Api::namespaced(ctx.kube.clone(), &namespace);
-        api.delete_collection(
-            &DeleteParams::default(),
-            &ListParams::default().labels(&volumes::selector(&name)),
-        )
-        .await?;
+        delete_provisioned_volumes(&ctx, &sandbox, &name).await?;
     }
 
     Ok(Action::await_change())
+}
+
+/// Delete the PVCs this sandbox provisioned (called only when `volumeRetention`
+/// is `Delete`).
+async fn delete_provisioned_volumes(
+    ctx: &Context,
+    sandbox: &OpenShellSandbox,
+    name: &str,
+) -> Result<()> {
+    let namespace = sandbox.namespace().ok_or(Error::MissingNamespace)?;
+    info!(%name, "deleting provisioned sandbox volumes");
+    let api: Api<PersistentVolumeClaim> = Api::namespaced(ctx.kube.clone(), &namespace);
+    api.delete_collection(
+        &DeleteParams::default(),
+        &ListParams::default().labels(&volumes::selector(name)),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Merge-patch `.status`. Merge (not apply) keeps this free of field-manager
