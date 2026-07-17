@@ -33,7 +33,9 @@ serde_json = "1"
 serde_yaml = "0.9"
 # `Time` for status condition timestamps (metav1.Condition.lastTransitionTime).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
+# Serves the liveness/readiness probe endpoints.
+axum = "0.8"
 futures = "0.3"
 async-trait = "0.1"
 tonic = "0.14"
@@ -52,6 +54,10 @@ openshell-core = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a
 # Canonical policy schema parser/validator; the single source of truth for
 # translating policy documents into the proto `SandboxPolicy`.
 openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
+
+# `ServiceExt::oneshot` drives the health router in tests without a socket.
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 # Lints are defined once at the workspace root (see /Cargo.toml).
 [lints]

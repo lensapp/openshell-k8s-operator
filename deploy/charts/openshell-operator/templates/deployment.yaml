@@ -36,6 +36,26 @@ spec:
         - name: operator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          # Liveness: the process is up and its runtime is servicing HTTP.
+          # Readiness: startup finished (gateway client built). A leader-election
+          # standby reads ready too — it can take over — so a rollout can retire
+          # the old leader instead of deadlocking on a never-ready new pod.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            failureThreshold: 3
           env:
             - name: OPENSHELL_GATEWAY_ENDPOINT
               value: {{ include "openshell-operator.gatewayEndpoint" . | quote }}

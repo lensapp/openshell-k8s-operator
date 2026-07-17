@@ -1602,6 +1602,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "futures",
  "k8s-openapi",
@@ -1617,6 +1618,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tonic",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
