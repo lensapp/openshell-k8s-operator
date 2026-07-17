@@ -1,0 +1,21 @@
+{{- /* Fail fast on contradictory value combinations. Renders no objects. */ -}}
+{{- if .Values.gateway.bundled }}
+{{-   if ne .Values.auth.mode "bundledOidc" }}
+{{-     fail "gateway.bundled=true requires auth.mode=bundledOidc: the bundled gateway trusts the bundled issuer. For byo auth, set gateway.bundled=false and point gateway.endpoint at your own gateway." }}
+{{-   end }}
+{{-   if not .Values.operator.deployStandalone }}
+{{-     fail "gateway.bundled=true requires operator.deployStandalone=true: the bundled gateway trusts the bundled issuer, which is only installed alongside the operator. For a CRDs+RBAC-only install, set gateway.bundled=false." }}
+{{-   end }}
+{{- /* Helm can't template subchart values, so the gateway's OIDC literals must match what the operator/issuer use. Enforce it, don't just comment it. */ -}}
+{{-   $gw := .Values.openshellGateway.server.oidc }}
+{{-   $issuer := include "openshell-operator.issuerUrl" . }}
+{{-   if ne $gw.issuer $issuer }}
+{{-     fail (printf "openshellGateway.server.oidc.issuer (%s) must match the bundled issuer URL (%s); override both together." $gw.issuer $issuer) }}
+{{-   end }}
+{{-   if ne $gw.audience .Values.auth.oidc.audience }}
+{{-     fail (printf "openshellGateway.server.oidc.audience (%s) must match auth.oidc.audience (%s); override both together." $gw.audience .Values.auth.oidc.audience) }}
+{{-   end }}
+{{-   if ne $gw.adminRole .Values.auth.oidc.adminRole }}
+{{-     fail (printf "openshellGateway.server.oidc.adminRole (%s) must match auth.oidc.adminRole (%s); override both together." $gw.adminRole .Values.auth.oidc.adminRole) }}
+{{-   end }}
+{{- end }}

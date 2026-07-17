@@ -10,3 +10,13 @@ kubeVersion: ">=1.25.0-0"
 home: https://github.com/lenshq/openshell-k8s-operator
 sources:
   - https://github.com/lenshq/openshell-k8s-operator
+dependencies:
+  # The OpenShell gateway itself, bundled by default so a single `helm install`
+  # stands up gateway + issuer + operator. Disabled with gateway.bundled=false
+  # to point at an external (bring-your-own) gateway. Aliased so its values live
+  # under `openshellGateway:`, separate from our own `gateway:` knobs.
+  - name: helm-chart
+    alias: openshellGateway
+    version: "0.0.85"
+    repository: oci://ghcr.io/nvidia/openshell
+    condition: gateway.bundled

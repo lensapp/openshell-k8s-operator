@@ -23,12 +23,23 @@ operator:
   deployStandalone: true
 
 gateway:
-  # OpenShell gateway control-plane endpoint. Required for a standalone
-  # Deployment (there is no address the chart could guess) — point it at your
-  # gateway Service, e.g. https://openshell-gateway.openshell-system.svc:8080.
+  # Bundle the OpenShell gateway with this release (the batteries-included
+  # default: one helm install brings up gateway + issuer + operator). Set false
+  # to bring your own gateway and set `endpoint` below.
+  #
+  # Bundled mode pins the gateway to a fixed in-cluster identity
+  # (Service `openshell-gateway`, issuer `openshell-issuer`), so run at most one
+  # bundled release per namespace. The bundled gateway uses an ephemeral SQLite
+  # store; provide an external database for anything but dev/demo.
+  bundled: true
+  # OpenShell gateway control-plane endpoint. Required only when bundled=false —
+  # point it at your gateway Service, e.g.
+  # https://openshell-gateway.openshell-system.svc:8080. When bundled, the
+  # endpoint is derived from the bundled gateway's Service.
   endpoint: ""
   # Name of a Secret holding the gateway's server-CA bundle under key `ca.crt`,
-  # for a private-CA (https) gateway. Empty uses the system roots.
+  # for a private-CA (https) gateway. Empty uses the system roots; when bundled,
+  # defaults to the gateway's self-signed server-cert Secret.
   caSecret: ""
   # Skip TLS certificate verification (development only; do not use in prod).
   insecureSkipVerify: false
@@ -110,3 +121,31 @@ podAnnotations: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Values for the bundled OpenShell gateway subchart (rendered only when
+# gateway.bundled=true). Helm cannot template subchart values, so the OIDC
+# settings here are fixed literals that MUST stay in sync with auth.oidc.* and
+# the fixed bundled issuer identity. Only override alongside those.
+openshellGateway:
+  # Fixed name so the Service DNS and cert SANs are deterministic (and don't
+  # collide with the operator's own release-named resources).
+  fullnameOverride: openshell-gateway
+  # Optional infra the batteries-included default does not require. cert-manager
+  # and Gateway API stay off (the gateway self-signs via its certgen hook and is
+  # reached in-cluster by Service); the sandbox NetworkPolicy is off for
+  # portability across CNIs. Turn these on for a hardened install.
+  networkPolicy:
+    enabled: false
+  server:
+    # HTTPS with OIDC as the only auth: keep TLS on, drop the mTLS client CA so
+    # the operator connects with just its bearer over server-TLS.
+    tls:
+      clientCaSecretName: ""
+    # Trust the bundled issuer. issuer/audience/rolesClaim/adminRole mirror the
+    # operator's auth.oidc.* — keep them identical if you override either side.
+    oidc:
+      issuer: http://openshell-issuer:8081
+      audience: openshell-operator
+      rolesClaim: roles
+      adminRole: openshell-admin
+      userRole: openshell-user

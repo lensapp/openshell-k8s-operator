@@ -235,28 +235,36 @@ The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in
 
 ## Install
 
-Install the CRDs, RBAC, and operator with the bundled Helm chart:
+One command installs a complete, working stack — gateway, OIDC issuer, and
+operator, already wired together:
 
 ```bash
-helm install openshell-operator deploy/charts/openshell-operator \
+helm install openshell deploy/charts/openshell-operator \
   --namespace openshell-system --create-namespace
 ```
 
-By default the operator runs as a standalone Deployment; set `gateway.endpoint`
-to your gateway's address. Setting `operator.deployStandalone=false` installs
-only the CRDs and RBAC (for embedding the operator container elsewhere).
+By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell
+gateway as a subchart, stands up a small static OIDC issuer that mints the
+operator's admin bearer, and points the operator at the gateway over TLS — no
+external gateway, IdP, or manual config. The bundled gateway self-signs its
+TLS (no cert-manager), uses an ephemeral SQLite store, and takes a fixed
+in-cluster identity, so it's meant for one release per namespace and for
+dev/demo rather than production.
 
-The operator authenticates to the gateway with an OIDC bearer. By default
-(`auth.mode=bundledOidc`) the chart installs a small static OIDC issuer that
-mints the operator's admin token and serves its JWKS; the install notes print
-the `issuer`/`audience`/`admin_role` values to configure your gateway with. Set
-`auth.mode=byo` to instead mount your own token Secret (`auth.byo.tokenSecret`),
-or leave it empty to connect anonymously against a gateway that allows it. See
+**Bring your own gateway** with `--set gateway.bundled=false --set
+gateway.endpoint=https://your-gateway:8080`. The chart then installs just the
+operator (and, by default, the issuer), and the install notes print the
+`issuer`/`audience`/`admin_role` values to configure your gateway to trust the
+issuer. Or set `auth.mode=byo` to mount your own token Secret
+(`auth.byo.tokenSecret`) instead of the bundled issuer. See
 [`docs/operator-auth.md`](docs/operator-auth.md) for the design.
 
-Key values: `image.repository` / `image.tag`, `gateway.endpoint`,
-`gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `logLevel`, `crds.install`,
-`operator.deployStandalone`, `resources`.
+`operator.deployStandalone=false` installs only the CRDs and RBAC (for
+embedding the operator container elsewhere; pair with `gateway.bundled=false`).
+
+Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`,
+`auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`,
+`crds.install`, `operator.deployStandalone`, `resources`.
 
 ## Architecture
 

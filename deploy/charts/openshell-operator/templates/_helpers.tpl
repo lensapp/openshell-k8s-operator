@@ -72,21 +72,57 @@ Name of the ConfigMap the issuer publishes the JWKS + discovery doc into.
 {{- end -}}
 
 {{/*
-Name of the issuer serve Service.
+Name of the issuer serve Service. Bundled mode uses a fixed name so the gateway
+subchart can reference the issuer with a static literal (Helm can't template
+subchart values); BYO mode uses the release-scoped name.
 */}}
 {{- define "openshell-operator.issuerServiceName" -}}
+{{- if .Values.gateway.bundled -}}
+{{- "openshell-issuer" -}}
+{{- else -}}
 {{- printf "%s-issuer" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
-Public issuer URL the gateway discovers. Defaults to the in-cluster Service DNS
-of the bundled serve pod (http is accepted — no cert needed for the issuer).
+Public issuer URL the gateway discovers (http is accepted — the issuer serves
+only public JWKS, no cert needed). Bundled mode uses the fixed same-namespace
+short DNS that matches the gateway subchart's oidc.issuer literal; BYO mode uses
+the release-scoped Service FQDN. An explicit auth.oidc.issuerUrl wins.
 */}}
 {{- define "openshell-operator.issuerUrl" -}}
 {{- if .Values.auth.oidc.issuerUrl -}}
 {{- .Values.auth.oidc.issuerUrl -}}
+{{- else if .Values.gateway.bundled -}}
+{{- "http://openshell-issuer:8081" -}}
 {{- else -}}
 {{- printf "http://%s.%s.svc:8081" (include "openshell-operator.issuerServiceName" .) .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Gateway endpoint the operator dials. Bundled mode derives it from the gateway
+subchart's fixed Service (server-TLS on 8080); BYO mode requires gateway.endpoint.
+*/}}
+{{- define "openshell-operator.gatewayEndpoint" -}}
+{{- if .Values.gateway.endpoint -}}
+{{- .Values.gateway.endpoint -}}
+{{- else if .Values.gateway.bundled -}}
+{{- printf "https://openshell-gateway.%s.svc:8080" .Release.Namespace -}}
+{{- else -}}
+{{- fail "gateway.endpoint is required when gateway.bundled=false; set it, or leave gateway.bundled=true to install the bundled gateway" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Secret holding the gateway server-CA the operator trusts (key ca.crt). Bundled
+mode defaults to the gateway's self-signed server-cert Secret; empty otherwise.
+*/}}
+{{- define "openshell-operator.gatewayCaSecret" -}}
+{{- if .Values.gateway.caSecret -}}
+{{- .Values.gateway.caSecret -}}
+{{- else if .Values.gateway.bundled -}}
+{{- "openshell-server-tls" -}}
 {{- end -}}
 {{- end -}}
 
