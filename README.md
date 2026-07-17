@@ -283,9 +283,18 @@ issuer. Or set `auth.mode=byo` to mount your own token Secret
 `operator.deployStandalone=false` installs only the CRDs and RBAC (for
 embedding the operator container elsewhere; pair with `gateway.bundled=false`).
 
+**High availability.** Leader election is on by default, so scaling the operator
+is safe: `--set replicaCount=3` runs three replicas that contend for a
+`coordination.k8s.io` Lease and let only the holder reconcile while the rest
+stand by, so a rolling update or node loss fails over cleanly. The container
+serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as
+probes; readiness does not gate on leadership, so standbys report ready and
+never stall a rollout.
+
 Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`,
 `auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`,
-`crds.install`, `operator.deployStandalone`, `resources`.
+`crds.install`, `operator.deployStandalone`, `replicaCount`,
+`leaderElection.enabled`, `resources`.
 
 ## Architecture
 
