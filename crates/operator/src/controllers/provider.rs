@@ -32,8 +32,9 @@ use tracing::{info, warn};
 use super::{Context, ERROR_REQUEUE_INTERVAL, REQUEUE_INTERVAL, record_failure};
 use crate::conditions;
 use crate::crd::{OpenShellProvider, OpenShellProviderStatus};
+use crate::credentials::{self, CredentialMode};
 use crate::error::{Error, Result};
-use crate::gateway::{Gateway, ProviderInput};
+use crate::gateway::{ConfigureRefreshInput, Gateway, ProviderInput, ProviderProfileView};
 use crate::secret;
 
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
@@ -99,7 +100,7 @@ async fn apply(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Ac
     let mut current = provider.status.clone().unwrap_or_default().conditions;
 
     match sync_provider(&ctx, &provider, &namespace, &name).await {
-        Ok(hash) => {
+        Ok(outcome) => {
             conditions::set(
                 &mut current,
                 conditions::condition(
@@ -114,7 +115,8 @@ async fn apply(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Ac
             let status = OpenShellProviderStatus {
                 conditions: current,
                 observed_generation: generation,
-                synced_hash: Some(hash),
+                synced_hash: Some(outcome.hash),
+                credential_mode: Some(outcome.mode),
             };
             patch_status(&ctx, &namespace, &name, &status).await?;
             Ok(Action::requeue(REQUEUE_INTERVAL))
@@ -132,11 +134,12 @@ async fn apply(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Ac
                     now,
                 ),
             );
-            // Record the failure but keep any prior synced hash for visibility.
+            // Record the failure but keep any prior synced hash + mode for visibility.
             let status = OpenShellProviderStatus {
                 conditions: current,
                 observed_generation: generation,
                 synced_hash: provider.status.as_ref().and_then(|s| s.synced_hash.clone()),
+                credential_mode: provider.status.as_ref().and_then(|s| s.credential_mode),
             };
             // Don't let a status-patch failure mask the real sync error.
             if let Err(patch_err) = patch_status(&ctx, &namespace, &name, &status).await {
@@ -147,14 +150,20 @@ async fn apply(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Ac
     }
 }
 
-/// Resolve the referenced Secret and (idempotently) upsert the provider.
-/// Returns the hash of the synced material.
+/// Outcome of a successful sync: the material hash and how the credentials were
+/// handed to the gateway (for `.status`).
+struct SyncOutcome {
+    hash: String,
+    mode: CredentialMode,
+}
+
+/// Resolve the referenced Secret and (idempotently) sync the provider.
 async fn sync_provider(
     ctx: &Context,
     provider: &OpenShellProvider,
     namespace: &str,
     name: &str,
-) -> Result<String> {
+) -> Result<SyncOutcome> {
     let credentials =
         secret::resolve_credentials(&ctx.kube, namespace, &provider.spec.credentials_secret_ref)
             .await?;
@@ -168,25 +177,86 @@ async fn sync_provider(
     .await
 }
 
-/// Push resolved credentials + config to the gateway and return their hash.
-/// Split out from Secret resolution so it is testable against a fake gateway.
+/// Climb the credential ladder and sync the provider to the gateway.
+///
+/// The provider-type profile decides per-credential handling: values backing a
+/// gateway-mintable credential are configured as a refresh (their seed material
+/// routed away from the stored credentials), everything else is copied. The
+/// provider is upserted first because `ConfigureProviderRefresh` requires it to
+/// already exist. Split out from Secret resolution so it is testable against a
+/// fake gateway.
 async fn sync_to_gateway(
     gateway: &dyn Gateway,
     name: &str,
     provider_type: &str,
     credentials: BTreeMap<String, String>,
     config: BTreeMap<String, String>,
-) -> Result<String> {
+) -> Result<SyncOutcome> {
     let hash = hash_material(&credentials, &config);
+
+    let profile = find_profile(gateway, provider_type).await?;
+    let plan = credentials::plan_credentials(
+        profile
+            .iter()
+            .flat_map(|p| p.credentials.iter())
+            .map(|c| (c.name.as_str(), c.refresh.as_ref())),
+        &credentials,
+    );
+    let mode = plan.mode();
+
+    // A refresh-capable credential given only partial material is copied as a
+    // long-lived secret — the exposure refresh exists to avoid. Warn so it is
+    // not silent; the fix is to complete the Secret's material.
+    for degraded in &plan.degraded {
+        warn!(
+            %name,
+            credential = %degraded.credential_key,
+            missing = ?degraded.missing,
+            "refresh material incomplete; credential stored as a static secret \
+             instead of gateway-minted — supply the missing keys to avoid it"
+        );
+    }
+
+    // 1. Ensure the provider exists with its static credentials.
     gateway
         .upsert_provider(ProviderInput {
             name: name.to_owned(),
             provider_type: provider_type.to_owned(),
-            credentials,
+            credentials: plan.static_credentials,
             config,
         })
         .await?;
-    Ok(hash)
+
+    // 2. Configure gateway-minted refresh for the credentials that support it.
+    // Ordered after the upsert because `ConfigureProviderRefresh` requires the
+    // provider to exist. If a configure fails here the provider is briefly left
+    // without that credential; the reconcile retries and both calls are
+    // idempotent, so it converges.
+    for refresh in plan.refreshes {
+        gateway
+            .configure_provider_refresh(ConfigureRefreshInput {
+                provider: name.to_owned(),
+                credential_key: refresh.credential_key,
+                plan: refresh.plan,
+            })
+            .await?;
+    }
+
+    Ok(SyncOutcome { hash, mode })
+}
+
+/// Fetch the profile whose id exactly matches `provider_type`, or `None` when
+/// the gateway declares no such profile (an unknown/custom type, handled as a
+/// plain static copy). The gateway does not alias types, so the match is exact.
+async fn find_profile(
+    gateway: &dyn Gateway,
+    provider_type: &str,
+) -> Result<Option<ProviderProfileView>> {
+    Ok(gateway
+        .list_provider_profiles()
+        .await?
+        .into_iter()
+        .find(|profile| profile.id == provider_type))
 }
 
 /// Delete the provider on the gateway before the finalizer releases the CR.
@@ -252,16 +322,24 @@ fn error_policy(_provider: Arc<OpenShellProvider>, err: &Error, _ctx: Arc<Contex
 mod tests {
     use super::{Gateway, hash_material, references_secret, sync_to_gateway};
     use crate::crd::{OpenShellProvider, OpenShellProviderSpec, SecretRef};
+    use crate::credentials::{CredentialMode, MaterialSpec, RefreshSpec, RefreshStrategy};
     use crate::error::Result;
-    use crate::gateway::ProviderInput;
+    use crate::gateway::{
+        ConfigureRefreshInput, ProviderInput, ProviderProfileCredential, ProviderProfileView,
+    };
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
-    /// In-memory `Gateway` recording provider upserts/deletes.
+    /// In-memory `Gateway` recording provider upserts, refresh configuration,
+    /// and deletes. `profiles` is what `list_provider_profiles` returns; `order`
+    /// records the call sequence so sequencing invariants can be asserted.
     #[derive(Default)]
     struct FakeGateway {
+        profiles: Vec<ProviderProfileView>,
         upserted: Mutex<Vec<ProviderInput>>,
+        configured: Mutex<Vec<ConfigureRefreshInput>>,
         deleted: Mutex<Vec<String>>,
+        order: Mutex<Vec<&'static str>>,
     }
 
     #[async_trait::async_trait]
@@ -292,12 +370,21 @@ mod tests {
             unreachable!("provider controller does not touch sandboxes")
         }
         async fn upsert_provider(&self, input: ProviderInput) -> Result<()> {
+            self.order.lock().unwrap().push("upsert");
             self.upserted.lock().unwrap().push(input);
             Ok(())
         }
         async fn delete_provider(&self, name: &str) -> Result<bool> {
             self.deleted.lock().unwrap().push(name.to_owned());
             Ok(true)
+        }
+        async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfileView>> {
+            Ok(self.profiles.clone())
+        }
+        async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()> {
+            self.order.lock().unwrap().push("configure");
+            self.configured.lock().unwrap().push(input);
+            Ok(())
         }
     }
 
@@ -337,10 +424,40 @@ mod tests {
         assert!(!references_secret(&p, Some("team-a"), "other"));
     }
 
+    fn oauth2_spec() -> RefreshSpec {
+        RefreshSpec {
+            strategy: RefreshStrategy::Oauth2RefreshToken,
+            material: vec![
+                MaterialSpec {
+                    name: "client_id".to_owned(),
+                    required: true,
+                    secret: false,
+                },
+                MaterialSpec {
+                    name: "refresh_token".to_owned(),
+                    required: true,
+                    secret: true,
+                },
+            ],
+        }
+    }
+
+    /// A profile with a single credential named `credential` backed by `refresh`.
+    fn profile(id: &str, credential: &str, refresh: RefreshSpec) -> ProviderProfileView {
+        ProviderProfileView {
+            id: id.to_owned(),
+            credentials: vec![ProviderProfileCredential {
+                name: credential.to_owned(),
+                refresh: Some(refresh),
+            }],
+        }
+    }
+
     #[tokio::test]
-    async fn syncs_resolved_credentials_to_gateway() {
+    async fn copies_credentials_for_unknown_type() {
+        // No matching profile: every value is copied, matching pre-ladder behaviour.
         let gateway = FakeGateway::default();
-        let hash = sync_to_gateway(
+        let outcome = sync_to_gateway(
             &gateway,
             "prov",
             "claude",
@@ -355,10 +472,90 @@ mod tests {
         assert_eq!(upserted[0].name, "prov");
         assert_eq!(upserted[0].provider_type, "claude");
         assert_eq!(upserted[0].credentials.get("API_KEY").unwrap(), "sk-123");
+        assert!(gateway.configured.lock().unwrap().is_empty());
+        assert_eq!(outcome.mode, CredentialMode::Copied);
         assert_eq!(
-            hash,
+            outcome.hash,
             hash_material(&map(&[("API_KEY", "sk-123")]), &map(&[("region", "us")]))
         );
+    }
+
+    #[tokio::test]
+    async fn configures_refresh_for_mintable_credential() {
+        let gateway = FakeGateway {
+            profiles: vec![profile("vertex", "gcloud_adc_token", oauth2_spec())],
+            ..FakeGateway::default()
+        };
+        let outcome = sync_to_gateway(
+            &gateway,
+            "prov",
+            "vertex",
+            map(&[("client_id", "id"), ("refresh_token", "rt")]),
+            BTreeMap::new(),
+        )
+        .await
+        .expect("sync");
+
+        // Seed material is routed to the refresh, never stored as a credential.
+        let upserted = gateway.upserted.lock().unwrap();
+        assert!(upserted[0].credentials.is_empty());
+
+        let configured = gateway.configured.lock().unwrap();
+        assert_eq!(configured.len(), 1);
+        assert_eq!(configured[0].provider, "prov");
+        assert_eq!(configured[0].credential_key, "gcloud_adc_token");
+        assert_eq!(
+            configured[0].plan.strategy,
+            RefreshStrategy::Oauth2RefreshToken
+        );
+        assert_eq!(
+            configured[0].plan.material.get("refresh_token").unwrap(),
+            "rt"
+        );
+
+        assert_eq!(outcome.mode, CredentialMode::Refresh);
+        // The provider must exist before refresh is configured.
+        assert_eq!(*gateway.order.lock().unwrap(), vec!["upsert", "configure"]);
+    }
+
+    #[tokio::test]
+    async fn mixes_copied_and_refreshed_credentials() {
+        // Profile declares a static `api_key` and a mintable `gcloud_adc_token`.
+        let gateway = FakeGateway {
+            profiles: vec![ProviderProfileView {
+                id: "mixed".to_owned(),
+                credentials: vec![
+                    ProviderProfileCredential {
+                        name: "api_key".to_owned(),
+                        refresh: None,
+                    },
+                    ProviderProfileCredential {
+                        name: "gcloud_adc_token".to_owned(),
+                        refresh: Some(oauth2_spec()),
+                    },
+                ],
+            }],
+            ..FakeGateway::default()
+        };
+        let outcome = sync_to_gateway(
+            &gateway,
+            "prov",
+            "mixed",
+            map(&[
+                ("api_key", "sk-x"),
+                ("client_id", "id"),
+                ("refresh_token", "rt"),
+            ]),
+            BTreeMap::new(),
+        )
+        .await
+        .expect("sync");
+
+        let upserted = gateway.upserted.lock().unwrap();
+        assert_eq!(upserted[0].credentials.get("api_key").unwrap(), "sk-x");
+        assert!(!upserted[0].credentials.contains_key("refresh_token"));
+        assert_eq!(gateway.configured.lock().unwrap().len(), 1);
+        assert_eq!(outcome.mode, CredentialMode::Mixed);
     }
 
     #[test]

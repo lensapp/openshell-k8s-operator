@@ -9,9 +9,11 @@ Declarative, Kubernetes-native control over
 > convergence of mutable fields — providers and the policy's network/filesystem
 > — recreate-on-drift for immutable fields, and standard `Ready` conditions +
 > events),
-> `OpenShellProvider` (static credentials resolved from a Secret, synced to the
-> gateway), and `OpenShellPolicy` (a reusable sandbox policy document applied at
-> sandbox creation) resources are implemented.
+> `OpenShellProvider` (credentials resolved from a Secret and synced to the
+> gateway, each handled at the strongest tier the provider-type profile
+> supports — static copy or gateway-minted refresh), and `OpenShellPolicy` (a
+> reusable sandbox policy document applied at sandbox creation) resources are
+> implemented.
 
 ## What it does
 
@@ -42,7 +44,7 @@ kind: OpenShellProvider
 metadata:
   name: anthropic
 spec:
-  type: claude
+  type: claude-code   # a gateway provider-profile id (exact, not an alias)
   credentialsSecretRef:
     name: anthropic-credentials   # keys: [] reads all keys
 ---
@@ -132,8 +134,60 @@ rotation (external-secrets, Vault) triggers a resync.
 all of them), and `spec.config` passes non-secret settings (e.g. `region`)
 through to the gateway.
 
-`OpenShellProvider` covers static credentials only. Providers v2 (profiles +
-gateway-managed OAuth2 refresh) is a separate, future resource.
+#### Credential handling
+
+The same `OpenShellProvider` — no extra fields — gets the strongest credential
+handling the gateway supports for its `type`. At reconcile the operator reads
+the provider-type profile and picks per credential:
+
+- **`Copied`** — the value is stored on the gateway as a static key (e.g.
+  `claude-code`).
+- **`Refresh`** — the gateway mints short-lived tokens from seed *material* you
+  supply in the Secret (OAuth2 refresh / client-credentials, Google
+  service-account JWT). The long-lived seed lives only in the gateway's refresh
+  store, never as a stored static credential; the operator configures it once
+  and re-seeds on Secret rotation — it does not mint tokens itself.
+- **`Mixed`** — a multi-credential provider using both.
+
+The chosen tier is surfaced in `.status.credentialMode` (the `Mode` print
+column). Nothing changes in the CR to get `Refresh` — only the Secret's contents
+differ, dictated by the provider type:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vertex-credentials
+  annotations:
+    openshell.lenshq.io/allow-provider-ref: "true"
+stringData:
+  # google-vertex-ai's gcloud_adc_token refresh material — the operator routes
+  # these to the gateway's refresh config, not into a stored static credential.
+  client_id: "...apps.googleusercontent.com"
+  client_secret: "..."
+  refresh_token: "1//..."
+---
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellProvider
+metadata:
+  name: vertex
+spec:
+  type: google-vertex-ai
+  credentialsSecretRef:
+    name: vertex-credentials
+```
+
+```console
+$ kubectl get openshellproviders
+NAME        TYPE               MODE      READY
+anthropic   claude-code        Copied    True
+vertex      google-vertex-ai   Refresh   True
+```
+
+If a refresh-capable credential is only partially provisioned (some required
+material missing), the operator falls back to a static copy and logs a warning
+rather than degrading silently. AWS STS assume-role is recognised but deferred
+(gateway-gated behind `providers_v2`), so it currently stays `Copied`.
 
 ### Policies
 

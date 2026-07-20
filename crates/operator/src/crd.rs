@@ -9,6 +9,8 @@
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
 use kube::CustomResource;
+
+use crate::credentials::CredentialMode;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{Schema, SchemaObject};
@@ -250,6 +252,7 @@ pub enum Phase {
     status = "OpenShellProviderStatus",
     shortname = "osp",
     printcolumn = r#"{"name":"Type","type":"string","jsonPath":".spec.type"}"#,
+    printcolumn = r#"{"name":"Mode","type":"string","jsonPath":".status.credentialMode"}"#,
     printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
@@ -298,6 +301,12 @@ pub struct OpenShellProviderStatus {
     /// Secret rotation and lets operators see when a resync last changed state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_hash: Option<String>,
+
+    /// How the operator handed the credentials to the gateway on the last
+    /// successful sync: `Copied` (static values stored), `Refresh` (gateway
+    /// mints short-lived tokens from seed material), or `Mixed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_mode: Option<CredentialMode>,
 }
 
 /// A reusable sandbox policy document.

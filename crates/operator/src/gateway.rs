@@ -19,6 +19,7 @@ use openshell_sdk::raw::proto::{
 use openshell_sdk::{AuthConfig, ClientConfig, OpenShellClient, SandboxPhase, SdkError};
 use tonic::Code;
 
+use crate::credentials::{MaterialSpec, RefreshPlan, RefreshSpec, RefreshStrategy};
 use crate::error::{Error, Result};
 
 /// Projection of a gateway sandbox the reconciler consumes.
@@ -89,6 +90,43 @@ pub struct ProviderInput {
     pub config: BTreeMap<String, String>,
 }
 
+/// A provider-type profile projected to what credential-strategy selection
+/// needs.
+///
+/// Deliberately not the SDK's `ProviderProfile`: that type is
+/// `#[non_exhaustive]` (no public constructor, so it can't be faked in tests)
+/// and carries far more than credential-handling selection consumes.
+#[derive(Clone, Debug, Default)]
+pub struct ProviderProfileView {
+    /// Profile id (the canonical provider-type slug).
+    pub id: String,
+    /// Declared credentials.
+    pub credentials: Vec<ProviderProfileCredential>,
+}
+
+/// One credential a provider profile declares.
+#[derive(Clone, Debug, Default)]
+pub struct ProviderProfileCredential {
+    /// Credential name (the key used with the gateway, e.g. `api_key`).
+    pub name: String,
+    /// Gateway-minted refresh behaviour, when the profile declares a
+    /// gateway-mintable strategy; `None` for static/external/no refresh.
+    pub refresh: Option<RefreshSpec>,
+}
+
+/// A gateway-minted credential-refresh configuration for one provider
+/// credential. The gateway mints short-lived tokens from the supplied
+/// [`RefreshPlan`]'s seed material.
+#[derive(Clone, Debug)]
+pub struct ConfigureRefreshInput {
+    /// Provider name.
+    pub provider: String,
+    /// Credential key within the provider (matches the profile credential name).
+    pub credential_key: String,
+    /// Strategy and seed material, resolved by [`crate::credentials`].
+    pub plan: RefreshPlan,
+}
+
 /// The subset of the OpenShell gateway API the reconcilers drive.
 #[async_trait]
 pub trait Gateway: Send + Sync {
@@ -120,6 +158,16 @@ pub trait Gateway: Send + Sync {
 
     /// Delete a provider by name. Returns `false` if it was already absent.
     async fn delete_provider(&self, name: &str) -> Result<bool>;
+
+    /// List the provider-type profiles the gateway knows, projected to
+    /// [`ProviderProfileView`]. Used to decide credential handling per type
+    /// (which credentials support a gateway-minted refresh strategy).
+    async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfileView>>;
+
+    /// Configure gateway-minted credential refresh for one provider credential.
+    /// The gateway thereafter mints short-lived tokens from the seed material
+    /// rather than injecting a stored static value.
+    async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()>;
 }
 
 /// Default gateway endpoint when `OPENSHELL_GATEWAY_ENDPOINT` is unset.
@@ -350,6 +398,99 @@ impl Gateway for SdkGateway {
             })
             .await?;
         Ok(response.into_inner().deleted)
+    }
+
+    async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfileView>> {
+        let mut grpc = self.client.raw_grpc();
+        let response = grpc
+            .list_provider_profiles(proto::ListProviderProfilesRequest::default())
+            .await?;
+        Ok(response
+            .into_inner()
+            .profiles
+            .into_iter()
+            .map(provider_profile_view)
+            .collect())
+    }
+
+    async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()> {
+        let mut grpc = self.client.raw_grpc();
+        grpc.configure_provider_refresh(proto::ConfigureProviderRefreshRequest {
+            provider: input.provider,
+            credential_key: input.credential_key,
+            strategy: refresh_strategy_to_proto(input.plan.strategy) as i32,
+            material: input.plan.material.into_iter().collect(),
+            secret_material_keys: input.plan.secret_material_keys,
+            // The credential's own expiry is managed by the refresh loop.
+            expires_at_ms: None,
+        })
+        .await?;
+        Ok(())
+    }
+}
+
+/// Project a raw proto `ProviderProfile` onto [`ProviderProfileView`].
+fn provider_profile_view(profile: proto::ProviderProfile) -> ProviderProfileView {
+    ProviderProfileView {
+        id: profile.id,
+        credentials: profile
+            .credentials
+            .into_iter()
+            .map(profile_credential)
+            .collect(),
+    }
+}
+
+/// Project a raw proto `ProviderProfileCredential` onto the reconciler's view,
+/// keeping only a refresh spec the gateway can actually mint.
+fn profile_credential(credential: proto::ProviderProfileCredential) -> ProviderProfileCredential {
+    ProviderProfileCredential {
+        name: credential.name,
+        refresh: credential.refresh.and_then(refresh_spec),
+    }
+}
+
+/// Map a proto refresh block onto a [`RefreshSpec`], or `None` when its strategy
+/// is not gateway-mintable (`unspecified`/`static`/`external`).
+fn refresh_spec(refresh: proto::ProviderCredentialRefresh) -> Option<RefreshSpec> {
+    let strategy = refresh_strategy_from_proto(refresh.strategy)?;
+    Some(RefreshSpec {
+        strategy,
+        material: refresh
+            .material
+            .into_iter()
+            .map(|material| MaterialSpec {
+                name: material.name,
+                required: material.required,
+                secret: material.secret,
+            })
+            .collect(),
+    })
+}
+
+/// Map a proto refresh-strategy discriminant onto a gateway-mintable
+/// [`RefreshStrategy`], or `None` for strategies the gateway does not mint.
+fn refresh_strategy_from_proto(value: i32) -> Option<RefreshStrategy> {
+    use proto::ProviderCredentialRefreshStrategy as S;
+    match S::try_from(value).ok()? {
+        S::Oauth2RefreshToken => Some(RefreshStrategy::Oauth2RefreshToken),
+        S::Oauth2ClientCredentials => Some(RefreshStrategy::Oauth2ClientCredentials),
+        S::GoogleServiceAccountJwt => Some(RefreshStrategy::GoogleServiceAccountJwt),
+        S::AwsStsAssumeRole => Some(RefreshStrategy::AwsStsAssumeRole),
+        S::Unspecified | S::Static | S::External => None,
+    }
+}
+
+/// Map a [`RefreshStrategy`] onto its proto discriminant.
+fn refresh_strategy_to_proto(
+    strategy: RefreshStrategy,
+) -> proto::ProviderCredentialRefreshStrategy {
+    use proto::ProviderCredentialRefreshStrategy as S;
+    match strategy {
+        RefreshStrategy::Oauth2RefreshToken => S::Oauth2RefreshToken,
+        RefreshStrategy::Oauth2ClientCredentials => S::Oauth2ClientCredentials,
+        RefreshStrategy::GoogleServiceAccountJwt => S::GoogleServiceAccountJwt,
+        RefreshStrategy::AwsStsAssumeRole => S::AwsStsAssumeRole,
     }
 }
 

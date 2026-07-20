@@ -17,6 +17,7 @@
 pub mod conditions;
 pub mod controllers;
 pub mod crd;
+pub mod credentials;
 pub mod error;
 pub mod gateway;
 pub mod health;

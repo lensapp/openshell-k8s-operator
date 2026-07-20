@@ -411,6 +411,9 @@ spec:
     - jsonPath: .spec.type
       name: Type
       type: string
+    - jsonPath: .status.credentialMode
+      name: Mode
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -491,6 +494,14 @@ spec:
                   - type
                   type: object
                 type: array
+              credentialMode:
+                description: 'How the operator handed the credentials to the gateway on the last successful sync: `Copied` (static values stored), `Refresh` (gateway mints short-lived tokens from seed material), or `Mixed`.'
+                enum:
+                - Copied
+                - Refresh
+                - Mixed
+                nullable: true
+                type: string
               observedGeneration:
                 description: '`.metadata.generation` last reconciled, for GitOps health checks.'
                 format: int64
