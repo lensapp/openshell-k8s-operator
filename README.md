@@ -411,6 +411,22 @@ git config core.hooksPath .githooks
 `openshell-sdk` and `openshell-core` are consumed as git dependencies pinned to
 an exact revision of NVIDIA/OpenShell `main`.
 
+### Releases
+
+Releasing is automated by [release-please](https://github.com/googleapis/release-please)
+from the Conventional Commit history. It keeps a release PR open that bumps the
+chart `version` + `appVersion` and updates `CHANGELOG.md`; merging it tags
+`vX.Y.Z` and publishes, all to GHCR:
+
+- `ghcr.io/lensapp/openshell-operator:X.Y.Z` and `openshell-issuer:X.Y.Z`
+  (multi-arch `linux/amd64` + `linux/arm64`), plus `:latest`.
+- the Helm chart at `oci://ghcr.io/lensapp/charts/openshell-operator` (version
+  `X.Y.Z`).
+
+Crate versions in `Cargo.toml` are internal and intentionally left untouched by
+releases. `feat:` bumps the minor, `fix:` the patch (breaking changes stay
+within `0.x` until a deliberate `1.0.0`).
+
 ## License
 
 Apache-2.0.
