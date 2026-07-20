@@ -708,6 +708,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
 name = "gloo-timers"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1555,10 +1561,11 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openshell-core"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?rev=3dee5570a46076a57a3b056f35f35ebc0861ac85#3dee5570a46076a57a3b056f35f35ebc0861ac85"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.86#d556748771c41cbbd4e4dd7cd9030c798afe2b7d"
 dependencies = [
  "base64",
  "chrono",
+ "glob",
  "ipnet",
  "miette",
  "prost",
@@ -1626,10 +1633,11 @@ dependencies = [
 [[package]]
 name = "openshell-policy"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?rev=3dee5570a46076a57a3b056f35f35ebc0861ac85#3dee5570a46076a57a3b056f35f35ebc0861ac85"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.86#d556748771c41cbbd4e4dd7cd9030c798afe2b7d"
 dependencies = [
  "miette",
  "openshell-core",
+ "prost-types",
  "serde",
  "serde_json",
  "serde_yml",
@@ -1638,7 +1646,7 @@ dependencies = [
 [[package]]
 name = "openshell-sdk"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?rev=3dee5570a46076a57a3b056f35f35ebc0861ac85#3dee5570a46076a57a3b056f35f35ebc0861ac85"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.86#d556748771c41cbbd4e4dd7cd9030c798afe2b7d"
 dependencies = [
  "async-trait",
  "futures",

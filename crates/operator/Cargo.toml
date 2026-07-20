@@ -48,12 +48,13 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # OpenShell gateway client + shared types, reused as pinned git deps.
-# Pinned to an exact rev on origin/main; bump deliberately (see PLAN.md drift job).
-openshell-sdk = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
-openshell-core = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
+# Pinned to an exact release tag; bump deliberately (treat the gRPC proto as an
+# external contract — re-check after any bump).
+openshell-sdk = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.86" }
+openshell-core = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.86" }
 # Canonical policy schema parser/validator; the single source of truth for
 # translating policy documents into the proto `SandboxPolicy`.
-openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", rev = "3dee5570a46076a57a3b056f35f35ebc0861ac85" }
+openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.86" }
 
 # `ServiceExt::oneshot` drives the health router in tests without a socket.
 [dev-dependencies]
