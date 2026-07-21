@@ -1,90 +1,48 @@
 # OpenShell Kubernetes Operator
 
-Declarative, Kubernetes-native control over
-[OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes — manage them with
-`kubectl apply` instead of talking to the gateway directly.
+Declarative, Kubernetes-native control over [OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes — manage them with `kubectl apply` instead of talking to the gateway directly.
 
-> **Status:** early development. Three resources are implemented:
-> `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes,
-> in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from
-> a Secret, synced as a static copy or gateway-minted refresh), and
-> `OpenShellPolicy` (a reusable policy applied at sandbox creation).
+> **Status:** early development. Three resources are implemented: `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes, in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from a Secret, synced as a static copy or gateway-minted refresh), and `OpenShellPolicy` (a reusable policy applied at sandbox creation).
 
 ## What it does
 
-The operator is a thin front-end over the OpenShell gateway's gRPC API. You
-declare desired state as custom resources; the operator reconciles them into
-gateway calls and mirrors gateway state back into the resource `.status`. It
-does not reimplement the gateway.
+The operator is a thin front-end over the OpenShell gateway's gRPC API. You declare desired state as custom resources; the operator reconciles them into gateway calls and mirrors gateway state back into the resource `.status`. It does not reimplement the gateway.
 
 ## Install
 
 ### Prerequisite: Agent Sandbox
 
-The OpenShell gateway provisions sandbox pods through the
-[Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubernetes SIG project
-(`sandboxes.agents.x-k8s.io`). Its controller and CRDs are a **cluster-wide
-prerequisite** — install them once, before the chart, whether you use the
-bundled gateway or bring your own:
+The OpenShell gateway provisions sandbox pods through the [Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubernetes SIG project (`sandboxes.agents.x-k8s.io`). Its controller and CRDs are a **cluster-wide prerequisite** — install them once, before the chart, whether you use the bundled gateway or bring your own:
 
 ```bash
 kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
 kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
 ```
 
-Without it the gateway comes up but its compute driver logs `no supported Agent
-Sandbox API version is available` and cannot create sandboxes. The chart does
-not bundle it: it is shared cluster infrastructure (a CRD + controller) whose
-lifecycle should not be tied to this release. If you install it *after* the
-gateway, restart the gateway so it re-detects the served API.
+Without it the gateway comes up but its compute driver logs `no supported Agent Sandbox API version is available` and cannot create sandboxes. The chart does not bundle it: it is shared cluster infrastructure (a CRD + controller) whose lifecycle should not be tied to this release. If you install it *after* the gateway, restart the gateway so it re-detects the served API.
 
 ### Chart
 
-One command installs a complete, working stack — gateway, OIDC issuer, and
-operator, already wired together:
+One command installs a complete stack — gateway, OIDC issuer, and operator, already wired together:
 
 ```bash
 helm install openshell deploy/charts/openshell-operator \
   --namespace openshell-system --create-namespace
 ```
 
-By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell
-gateway as a subchart, stands up a small static OIDC issuer that mints the
-operator's admin bearer, and points the operator at the gateway over TLS — no
-external gateway, IdP, or manual config. The bundled gateway self-signs its
-TLS (no cert-manager), uses an ephemeral SQLite store, and takes a fixed
-in-cluster identity, so it's meant for one release per namespace and for
-dev/demo rather than production.
+By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell gateway as a subchart, stands up a small static OIDC issuer that mints the operator's admin bearer, and points the operator at the gateway over TLS — no external gateway, IdP, or manual config. The bundled gateway self-signs its TLS (no cert-manager), uses an ephemeral SQLite store, and takes a fixed in-cluster identity, so it's meant for one release per namespace and for dev/demo rather than production.
 
-**Bring your own gateway** with `--set gateway.bundled=false --set
-gateway.endpoint=https://your-gateway:8080`. The chart then installs just the
-operator (and, by default, the issuer), and the install notes print the
-`issuer`/`audience`/`admin_role` values to configure your gateway to trust the
-issuer. Or set `auth.mode=byo` to mount your own token Secret
-(`auth.byo.tokenSecret`) instead of the bundled issuer. See
-[`docs/operator-auth.md`](docs/operator-auth.md) for the design.
+**Bring your own gateway** with `--set gateway.bundled=false --set gateway.endpoint=https://your-gateway:8080`. The chart then installs just the operator (and, by default, the issuer), and the install notes print the `issuer`/`audience`/`admin_role` values to configure your gateway to trust the issuer. Or set `auth.mode=byo` to mount your own token Secret (`auth.byo.tokenSecret`) instead of the bundled issuer. See [`docs/operator-auth.md`](docs/operator-auth.md) for the design.
 
-`operator.deployStandalone=false` installs only the CRDs and RBAC (for
-embedding the operator container elsewhere; pair with `gateway.bundled=false`).
+`operator.deployStandalone=false` installs only the CRDs and RBAC (for embedding the operator container elsewhere; pair with `gateway.bundled=false`).
 
-**High availability.** Leader election is on by default, so scaling the operator
-is safe: `--set replicaCount=3` runs three replicas that contend for a
-`coordination.k8s.io` Lease and let only the holder reconcile while the rest
-stand by, so a rolling update or node loss fails over cleanly. The container
-serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as
-probes; readiness does not gate on leadership, so standbys report ready and
-never stall a rollout.
+**High availability.** Leader election is on by default, so scaling the operator is safe: `--set replicaCount=3` runs three replicas that contend for a `coordination.k8s.io` Lease and let only the holder reconcile while the rest stand by, so a rolling update or node loss fails over cleanly. The container serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as probes; readiness does not gate on leadership, so standbys report ready and never stall a rollout.
 
-Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`,
-`auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`,
-`crds.install`, `operator.deployStandalone`, `replicaCount`,
-`leaderElection.enabled`, `resources`.
+Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`, `crds.install`, `operator.deployStandalone`, `replicaCount`, `leaderElection.enabled`, `resources`.
 
 ## Example
 
-A complete, self-contained setup: a credential Secret, an `OpenShellProvider` that
-binds it on the gateway, an `OpenShellPolicy` that constrains the sandbox, and an
-`OpenShellSandbox` that pulls both together via `providers` and `policyRef`.
+A complete, self-contained setup: a credential Secret, an `OpenShellProvider` that binds it on the gateway, an `OpenShellPolicy` that constrains the sandbox, and an `OpenShellSandbox` that pulls both together via `providers` and `policyRef`.
 
 ```yaml
 # Credentials live in a Secret, never on the CR. It opts in to being referenced.
@@ -177,39 +135,23 @@ $ kubectl wait --for=condition=Ready oss/my-sandbox
 openshellsandbox.openshell.lenshq.io/my-sandbox condition met
 ```
 
-The three resource types are covered in detail below.
+The sections below cover each resource type in detail.
 
 ### Providers
 
-An `OpenShellProvider` binds a credential set on the gateway. Credential values
-never live on the resource — they are read from a referenced Secret in the same
-namespace, which must opt in with the annotation
-`openshell.lenshq.io/allow-provider-ref: "true"` (see the `OpenShellProvider` and
-Secret in the example above). The operator watches the Secret, so external
-rotation (external-secrets, Vault) triggers a resync.
+An `OpenShellProvider` binds a credential set on the gateway. Credential values never live on the resource — the operator reads them from a Secret in the same namespace, which must opt in with the annotation `openshell.lenshq.io/allow-provider-ref: "true"` (see the `OpenShellProvider` and Secret in the example above). The operator watches the Secret, so external rotation (external-secrets, Vault) triggers a resync.
 
-`credentialsSecretRef.keys` selects a subset of the Secret's keys (empty reads
-all of them), and `spec.config` passes non-secret settings (e.g. `region`)
-through to the gateway.
+`credentialsSecretRef.keys` selects a subset of the Secret's keys (empty reads all of them), and `spec.config` passes non-secret settings (e.g. `region`) through to the gateway.
 
 #### Credential handling
 
-The same `OpenShellProvider` — no extra fields — gets the strongest credential
-handling the gateway supports for its `type`. At reconcile the operator reads
-the provider-type profile and picks per credential:
+The same `OpenShellProvider` — no extra fields — gets the strongest credential handling the gateway supports for its `type`. At reconcile the operator reads the provider-type profile and picks per credential:
 
-- **`Copied`** — the value is stored on the gateway as a static key (e.g.
-  `claude-code`).
-- **`Refresh`** — the gateway mints short-lived tokens from seed *material* you
-  supply in the Secret (OAuth2 refresh / client-credentials, Google
-  service-account JWT). The long-lived seed lives only in the gateway's refresh
-  store, never as a stored static credential; the operator configures it once
-  and re-seeds on Secret rotation — it does not mint tokens itself.
+- **`Copied`** — the value is stored on the gateway as a static key (e.g. `claude-code`).
+- **`Refresh`** — the gateway mints short-lived tokens from seed *material* you supply in the Secret (OAuth2 refresh / client-credentials, Google service-account JWT). The long-lived seed lives only in the gateway's refresh store, never as a stored static credential; the operator configures it once and re-seeds on Secret rotation — it does not mint tokens itself.
 - **`Mixed`** — a multi-credential provider using both.
 
-The chosen tier is surfaced in `.status.credentialMode` (the `Mode` print
-column). Nothing changes in the CR to get `Refresh` — only the Secret's contents
-differ, dictated by the provider type:
+The operator surfaces the chosen tier in `.status.credentialMode` (the `Mode` print column). Nothing changes in the CR to get `Refresh` — only the Secret's contents differ, dictated by the provider type:
 
 ```yaml
 apiVersion: v1
@@ -242,25 +184,13 @@ anthropic   claude-code        Copied    True
 vertex      google-vertex-ai   Refresh   True
 ```
 
-If a refresh-capable credential is only partially provisioned (some required
-material missing), the operator falls back to a static copy and logs a warning
-rather than degrading silently. AWS STS assume-role is recognised but deferred
-(gateway-gated behind `providers_v2`), so it currently stays `Copied`.
+If a refresh-capable credential is only partially provisioned (some required material missing), the operator falls back to a static copy and logs a warning rather than degrading silently. AWS STS assume-role is recognised but deferred (gateway-gated behind `providers_v2`), so it currently stays `Copied`.
 
 ### Policies
 
-An `OpenShellPolicy` (see the example above) is a reusable sandbox policy
-document. An `OpenShellSandbox` names one via `spec.policyRef`; the operator
-resolves it and applies it when the sandbox is created. The high-value sections
-(`filesystem`, `landlock`, `process`) are typed; `networkPolicies` is passed
-through opaquely, validated by the gateway's own policy parser rather than
-mirrored here. The `OpenShellPolicy` reconciler validates the document and
-reports the result on its `Ready` condition (with the parser's diagnostic in
-the condition message), so a bad policy surfaces before any sandbox uses it.
+An `OpenShellPolicy` (see the example above) is a reusable sandbox policy document. An `OpenShellSandbox` names one via `spec.policyRef`; the operator resolves it and applies it when the sandbox is created. The high-value sections (`filesystem`, `landlock`, `process`) are typed; `networkPolicies` passes through opaquely, and the gateway's own parser validates it rather than the operator mirroring it here. The `OpenShellPolicy` reconciler validates the document and reports the result on its `Ready` condition (with the parser's diagnostic in the condition message), so a bad policy surfaces before any sandbox uses it.
 
-For a one-off sandbox you can skip the separate resource and inline the same
-document directly under `spec.policy` instead of `spec.policyRef` (specify at
-most one of the two):
+For a one-off sandbox you can skip the separate resource and inline the same document directly under `spec.policy` instead of `spec.policyRef` (specify at most one of the two):
 
 ```yaml
 kind: OpenShellSandbox
@@ -272,108 +202,43 @@ spec:
       runAsUser: sandbox
 ```
 
-Editing a policy — inline or a shared `OpenShellPolicy` — **is** retroactive:
-the operator watches referenced policies and reconverges every sandbox that
-names one. How it converges depends on the section (see
-[Updates and recreation](#updates-and-recreation)): `networkPolicies` and
-additive `filesystem` changes are pushed to the live sandbox in place, while
-`landlock`/`process` changes force a recreate, since the gateway holds those
-immutable. A shared policy that goes missing or invalid never tears down a
-running sandbox — the sandbox keeps its last-applied policy and the failure
-surfaces on its `Ready` condition.
+Editing a policy — inline or a shared `OpenShellPolicy` — **is** retroactive: the operator watches referenced policies and reconverges every sandbox that names one. How it converges depends on the section (see [Updates and recreation](#updates-and-recreation)): `networkPolicies` and additive `filesystem` changes are pushed to the live sandbox in place, while `landlock`/`process` changes force a recreate, since the gateway holds those immutable. A shared policy that goes missing or invalid never tears down a running sandbox — the sandbox keeps its last-applied policy and the failure surfaces on its `Ready` condition.
 
 ### Persistent volumes
 
-`spec.volumes` gives a sandbox durable storage. For each entry the operator
-provisions a `PersistentVolumeClaim` (named `<sandbox>-<volume>`) from the
-embedded `claim` — the standard Kubernetes `PersistentVolumeClaimSpec`, so
-`storageClassName`, `accessModes`, `resources`, and `dataSource` (restore from a
-VolumeSnapshot or clone an existing PVC) are all available — and mounts it into
-the sandbox at `mountPath`.
+`spec.volumes` gives a sandbox durable storage. For each entry the operator provisions a `PersistentVolumeClaim` (named `<sandbox>-<volume>`) from the embedded `claim` — the standard Kubernetes `PersistentVolumeClaimSpec`, so `storageClassName`, `accessModes`, `resources`, and `dataSource` (restore from a VolumeSnapshot or clone an existing PVC) are all available — and mounts it into the sandbox at `mountPath`.
 
-The PVC is owned by the `OpenShellSandbox`, **not** by the gateway sandbox
-underneath it. That is the point: the gateway treats a sandbox's image, policy,
-and other fields as immutable, so changing them means deleting and re-creating
-the sandbox — and because the PVC is anchored to the resource rather than the
-disposable sandbox, its data survives that recreation. Mounting a volume under
-`/sandbox` hands OpenShell's workspace persistence to it; mount elsewhere (e.g.
-`/data`, as above) to keep durable storage alongside the image-seeded workspace.
+The `OpenShellSandbox` owns the PVC, **not** the gateway sandbox underneath it. That is the point: the gateway treats a sandbox's image, policy, and other fields as immutable, so changing them means deleting and re-creating the sandbox — and because the PVC is anchored to the resource rather than the disposable sandbox, its data survives that recreation. Mounting a volume under `/sandbox` hands OpenShell's workspace persistence to it; mount elsewhere (e.g. `/data`, as above) to keep durable storage alongside the image-seeded workspace.
 
-`volumeRetention` governs what happens to the PVCs when the `OpenShellSandbox`
-itself is deleted: `Retain` (default) keeps them so the data outlives the
-resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox
-mounts a filesystem.
+`volumeRetention` governs what happens to the PVCs when the `OpenShellSandbox` itself is deleted: `Retain` (default) keeps them so the data outlives the resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox mounts a filesystem.
 
 ### Updates and recreation
 
-The gateway treats much of a sandbox's spec as immutable on a running sandbox.
-When you edit an **immutable** field — `image`, `environment`, `gpu`/`gpuCount`,
-`logLevel`, `runtimeClassName`, `resources`, `labels`, `annotations`, the volume
-mounts, or the resolved policy's `landlock`/`process` (from `spec.policy` or a
-referenced `OpenShellPolicy`) — the operator converges by **deleting and
-recreating the gateway sandbox**. It tracks the applied fields as a hash in
-`.status.appliedSpecHash`, so it recreates only on a real change (and adopts a
-pre-existing sandbox without recreating it). During a recreate it emits a
-`Normal` `Recreating` event.
+The gateway treats much of a sandbox's spec as immutable on a running sandbox. When you edit an **immutable** field — `image`, `environment`, `gpu`/`gpuCount`, `logLevel`, `runtimeClassName`, `resources`, `labels`, `annotations`, the volume mounts, or the resolved policy's `landlock`/`process` (from `spec.policy` or a referenced `OpenShellPolicy`) — the operator converges by **deleting and recreating the gateway sandbox**. It tracks the applied fields as a hash in `.status.appliedSpecHash`, so it recreates only on a real change (and adopts a pre-existing sandbox without recreating it). During a recreate it emits a `Normal` `Recreating` event.
 
-Operator-owned volumes are anchored to the `OpenShellSandbox`, so they survive
-the recreate and reattach by name — the whole reason for the volumes feature.
+Operator-owned volumes are anchored to the `OpenShellSandbox`, so they survive the recreate and reattach by name — the whole reason for the volumes feature.
 
-> ⚠️ **Recreation only preserves data on operator-owned volumes.** Deleting the
-> gateway sandbox cascade-deletes anything the *gateway* owns — including its
-> injected workspace PVC when the sandbox has **no** custom volume over
-> `/sandbox`. Only the custom volumes above (referenced by `claimName`, with no
-> owner reference) survive. To keep workspace state across an image or policy
-> change, mount a volume at `/sandbox`; otherwise the workspace is rebuilt from
-> the image on recreate.
+> ⚠️ **Recreation only preserves data on operator-owned volumes.** Deleting the gateway sandbox cascade-deletes anything the *gateway* owns — including its injected workspace PVC when the sandbox has **no** custom volume over `/sandbox`. Only the custom volumes above (referenced by `claimName`, with no owner reference) survive. To keep workspace state across an image or policy change, mount a volume at `/sandbox`; otherwise the workspace is rebuilt from the image on recreate.
 
-The **mutable** fields are converged **in place**, without recreating:
+The operator converges the **mutable** fields **in place**, without recreating:
 
-- **`providers`** — editing `spec.providers` on a running sandbox attaches the
-  newly-listed providers and detaches the removed ones, reconciled against what
-  the gateway actually reports (so a manual detach is healed too).
-- **The policy's `networkPolicies` and `filesystem`** — a change is pushed to
-  the live sandbox via the gateway's `UpdateConfig`, tracked by a separate hash
-  in `.status.appliedPolicyHash`, and announced with a `Normal` `PolicyUpdated`
-  event. `filesystem` is **additively** mutable: adding read-only or read-write
-  paths works, but *removing* a path (or flipping `includeWorkdir`) is rejected
-  by the gateway — that failure surfaces on the `Ready` condition as
-  `PolicyUpdateRejected`. To drop a filesystem path, recreate the sandbox.
+- **`providers`** — editing `spec.providers` on a running sandbox attaches the newly-listed providers and detaches the removed ones, reconciled against what the gateway actually reports (so a manual detach is healed too).
+- **The policy's `networkPolicies` and `filesystem`** — a change is pushed to the live sandbox via the gateway's `UpdateConfig`, tracked by a separate hash in `.status.appliedPolicyHash`, and announced with a `Normal` `PolicyUpdated` event. `filesystem` is **additively** mutable: adding read-only or read-write paths works, but the gateway rejects *removing* a path (or flipping `includeWorkdir`) — that failure surfaces on the `Ready` condition as `PolicyUpdateRejected`. To drop a filesystem path, recreate the sandbox.
 
 ## Status and events
 
-Every resource reports reconcile health the standard way, so existing tooling
-just works:
+Every resource reports reconcile health the standard way, so existing tooling just works:
 
-- **`.status.conditions[]`** is the durable source of truth. Each resource
-  carries a standard `Ready` condition (`metav1.Condition`, with `reason`,
-  `message`, and `observedGeneration`), so `kubectl wait --for=condition=Ready`,
-  Argo CD / Flux health assessment, and kstatus all understand it. On failure
-  `Ready` goes `False` with a machine-readable `reason` (e.g.
-  `VolumeProvisionFailed`, `SecretNotFound`, `PolicyConflict`) and a human
-  `message`.
-- **Kubernetes events** are the transient breadcrumb trail. Reconcile failures
-  emit a `Warning` event against the resource, visible in `kubectl describe`.
-  Events expire; conditions do not — so conditions, not events, are what
-  automation should key on.
+- **`.status.conditions[]`** is the durable source of truth. Each resource carries a standard `Ready` condition (`metav1.Condition`, with `reason`, `message`, and `observedGeneration`), so `kubectl wait --for=condition=Ready`, Argo CD / Flux health assessment, and kstatus all understand it. On failure `Ready` goes `False` with a machine-readable `reason` (e.g. `VolumeProvisionFailed`, `SecretNotFound`, `PolicyConflict`) and a human `message`.
+- **Kubernetes events** are the transient breadcrumb trail. Reconcile failures emit a `Warning` event against the resource, visible in `kubectl describe`. Events expire; conditions do not — so conditions, not events, are what automation should key on.
 
-The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in
-`.status.phase` (a separate axis from `Ready`, much like `Pod.status.phase`).
+The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in `.status.phase` (a separate axis from `Ready`, much like `Pod.status.phase`).
 
 ## Architecture
 
-The operator is a thin, declarative front-end over the gateway's gRPC control
-plane: it translates custom resources into gateway calls and mirrors gateway
-state back into `.status`. See [`docs/architecture.md`](docs/architecture.md) for
-the full design — module layout, the reconcile model, drift detection, and the
-runtime concerns.
+The operator is a thin, declarative front-end over the gateway's gRPC control plane: it translates custom resources into gateway calls and mirrors gateway state back into `.status`. See [`docs/architecture.md`](docs/architecture.md) for the full design — module layout, the reconcile model, drift detection, and the runtime concerns.
 
-It authenticates to the gateway as an OIDC `User` (admin) with a bearer token
-minted by a small static OIDC issuer bundled in the chart — no external identity
-provider. The gateway keeps its normal posture: it enforces per-method
-authorization itself (fail-closed), so sandboxes, which present gateway-minted
-JWTs, are confined to the data plane without any additional proxy. See
-[`docs/operator-auth.md`](docs/operator-auth.md) for the full design.
+It authenticates to the gateway as an OIDC `User` (admin) with a bearer token minted by a small static OIDC issuer bundled in the chart — no external identity provider. The gateway keeps its normal posture: it enforces per-method authorization itself (fail-closed), so sandboxes, which present gateway-minted JWTs, stay confined to the data plane without any extra proxy. See [`docs/operator-auth.md`](docs/operator-auth.md) for the full design.
 
 ## Development
 
@@ -384,27 +249,18 @@ cargo run --bin openshell-operator   # against the current kubecontext; expects 
                                       # gateway at $OPENSHELL_GATEWAY_ENDPOINT
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full verification gate, the pinned
-toolchain, the git hooks, CRD regeneration, and commit conventions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full verification gate, the pinned toolchain, the git hooks, CRD regeneration, and commit conventions.
 
-`openshell-sdk` and `openshell-core` are consumed as git dependencies pinned to
-an exact revision of NVIDIA/OpenShell `main`.
+`openshell-sdk` and `openshell-core` are consumed as git dependencies pinned to an exact revision of NVIDIA/OpenShell `main`.
 
 ### Releases
 
-Releasing is automated by [release-please](https://github.com/googleapis/release-please)
-from the Conventional Commit history. It keeps a release PR open that bumps the
-chart `version` + `appVersion` and updates `CHANGELOG.md`; merging it tags
-`vX.Y.Z` and publishes, all to GHCR:
+[release-please](https://github.com/googleapis/release-please) automates releases from the Conventional Commit history. It keeps a release PR open that bumps the chart `version` + `appVersion` and updates `CHANGELOG.md`; merging it tags `vX.Y.Z` and publishes, all to GHCR:
 
-- `ghcr.io/lensapp/openshell-operator:X.Y.Z` and `openshell-issuer:X.Y.Z`
-  (multi-arch `linux/amd64` + `linux/arm64`), plus `:latest`.
-- the Helm chart at `oci://ghcr.io/lensapp/charts/openshell-operator` (version
-  `X.Y.Z`).
+- `ghcr.io/lensapp/openshell-operator:X.Y.Z` and `openshell-issuer:X.Y.Z` (multi-arch `linux/amd64` + `linux/arm64`), plus `:latest`.
+- the Helm chart at `oci://ghcr.io/lensapp/charts/openshell-operator` (version `X.Y.Z`).
 
-Crate versions in `Cargo.toml` are internal and intentionally left untouched by
-releases. `feat:` bumps the minor, `fix:` the patch (breaking changes stay
-within `0.x` until a deliberate `1.0.0`).
+Crate versions in `Cargo.toml` are internal and intentionally left untouched by releases. `feat:` bumps the minor, `fix:` the patch (breaking changes stay within `0.x` until a deliberate `1.0.0`).
 
 ## License
 
