@@ -61,3 +61,32 @@ jobs:
           context: .
           target: ${{ matrix.target }}
           push: false
+
+  # Backstop for the commit-msg hook: reject non-Conventional-Commit subjects so
+  # release-please always picks up changes. Uses the same shared validator.
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Conventional Commits
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          # First push of a branch / unknown base: nothing to compare against.
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "base commit unavailable; skipping"
+            exit 0
+          fi
+          status=0
+          for sha in $(git rev-list --no-merges "$base..${{ github.sha }}"); do
+            subject=$(git log -1 --format=%s "$sha")
+            # Merges are already dropped by --no-merges; skip the rest git generates.
+            case "$subject" in "Revert "*|fixup!*|squash!*) continue ;; esac
+            scripts/check-conventional-commit.sh "$subject" || status=1
+          done
+          exit "$status"

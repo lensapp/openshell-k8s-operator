@@ -401,8 +401,11 @@ The toolchain is pinned to the project's MSRV (`rust-toolchain.toml`, mirrored i
 `cognitive_complexity` drift between compiler versions, so an unpinned newer
 toolchain can pass locally yet fail CI.
 
-Enable the git hooks once per clone to run the CI `fmt` + `clippy` gate before
-each commit (`core.hooksPath` is not stored in the repo):
+Enable the git hooks once per clone (`core.hooksPath` is not stored in the
+repo): a pre-commit `fmt` + `clippy` gate, and a `commit-msg` check that
+enforces [Conventional Commits](https://www.conventionalcommits.org) so
+release-please can derive versions + changelog. CI enforces the same (the
+`commits` job), so hooks are for fast local feedback.
 
 ```bash
 git config core.hooksPath .githooks

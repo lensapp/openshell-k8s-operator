@@ -1,0 +1,15 @@
+#!/bin/sh
+# Enforce Conventional Commits (see scripts/check-conventional-commit.sh) so
+# release-please can derive versions + changelog from history. Mirrored by CI
+# (.github/workflows/ci.yml). Bypass with `git commit --no-verify` when you must.
+set -e
+
+# Subject = first non-comment, non-blank line of the message file ($1).
+subject=$(grep -vE '^[[:space:]]*#' "$1" | grep -vE '^[[:space:]]*$' | head -n1 || true)
+
+# Let git's own generated commits through (merge/revert/fixup/squash).
+case "$subject" in
+  "Merge "*|"Revert "*|fixup!*|squash!*) exit 0 ;;
+esac
+
+exec scripts/check-conventional-commit.sh "$subject"
