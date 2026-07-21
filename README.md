@@ -4,16 +4,11 @@ Declarative, Kubernetes-native control over
 [OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes — manage them with
 `kubectl apply` instead of talking to the gateway directly.
 
-> **Status:** early development. `OpenShellSandbox` (create / get / delete with
-> finalizer cleanup, operator-provisioned persistent volumes, in-place
-> convergence of mutable fields — providers and the policy's network/filesystem
-> — recreate-on-drift for immutable fields, and standard `Ready` conditions +
-> events),
-> `OpenShellProvider` (credentials resolved from a Secret and synced to the
-> gateway, each handled at the strongest tier the provider-type profile
-> supports — static copy or gateway-minted refresh), and `OpenShellPolicy` (a
-> reusable sandbox policy document applied at sandbox creation) resources are
-> implemented.
+> **Status:** early development. Three resources are implemented:
+> `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes,
+> in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from
+> a Secret, synced as a static copy or gateway-minted refresh), and
+> `OpenShellPolicy` (a reusable policy applied at sandbox creation).
 
 ## What it does
 
@@ -21,6 +16,69 @@ The operator is a thin front-end over the OpenShell gateway's gRPC API. You
 declare desired state as custom resources; the operator reconciles them into
 gateway calls and mirrors gateway state back into the resource `.status`. It
 does not reimplement the gateway.
+
+## Install
+
+### Prerequisite: Agent Sandbox
+
+The OpenShell gateway provisions sandbox pods through the
+[Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubernetes SIG project
+(`sandboxes.agents.x-k8s.io`). Its controller and CRDs are a **cluster-wide
+prerequisite** — install them once, before the chart, whether you use the
+bundled gateway or bring your own:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
+kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
+```
+
+Without it the gateway comes up but its compute driver logs `no supported Agent
+Sandbox API version is available` and cannot create sandboxes. The chart does
+not bundle it: it is shared cluster infrastructure (a CRD + controller) whose
+lifecycle should not be tied to this release. If you install it *after* the
+gateway, restart the gateway so it re-detects the served API.
+
+### Chart
+
+One command installs a complete, working stack — gateway, OIDC issuer, and
+operator, already wired together:
+
+```bash
+helm install openshell deploy/charts/openshell-operator \
+  --namespace openshell-system --create-namespace
+```
+
+By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell
+gateway as a subchart, stands up a small static OIDC issuer that mints the
+operator's admin bearer, and points the operator at the gateway over TLS — no
+external gateway, IdP, or manual config. The bundled gateway self-signs its
+TLS (no cert-manager), uses an ephemeral SQLite store, and takes a fixed
+in-cluster identity, so it's meant for one release per namespace and for
+dev/demo rather than production.
+
+**Bring your own gateway** with `--set gateway.bundled=false --set
+gateway.endpoint=https://your-gateway:8080`. The chart then installs just the
+operator (and, by default, the issuer), and the install notes print the
+`issuer`/`audience`/`admin_role` values to configure your gateway to trust the
+issuer. Or set `auth.mode=byo` to mount your own token Secret
+(`auth.byo.tokenSecret`) instead of the bundled issuer. See
+[`docs/operator-auth.md`](docs/operator-auth.md) for the design.
+
+`operator.deployStandalone=false` installs only the CRDs and RBAC (for
+embedding the operator container elsewhere; pair with `gateway.bundled=false`).
+
+**High availability.** Leader election is on by default, so scaling the operator
+is safe: `--set replicaCount=3` runs three replicas that contend for a
+`coordination.k8s.io` Lease and let only the holder reconcile while the rest
+stand by, so a rolling update or node loss fails over cleanly. The container
+serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as
+probes; readiness does not gate on leadership, so standbys report ready and
+never stall a rollout.
+
+Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`,
+`auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`,
+`crds.install`, `operator.deployStandalone`, `replicaCount`,
+`leaderElection.enabled`, `resources`.
 
 ## Example
 
@@ -302,69 +360,6 @@ just works:
 The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in
 `.status.phase` (a separate axis from `Ready`, much like `Pod.status.phase`).
 
-## Install
-
-### Prerequisite: Agent Sandbox
-
-The OpenShell gateway provisions sandbox pods through the
-[Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubernetes SIG project
-(`sandboxes.agents.x-k8s.io`). Its controller and CRDs are a **cluster-wide
-prerequisite** — install them once, before the chart, whether you use the
-bundled gateway or bring your own:
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
-kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller
-```
-
-Without it the gateway comes up but its compute driver logs `no supported Agent
-Sandbox API version is available` and cannot create sandboxes. The chart does
-not bundle it: it is shared cluster infrastructure (a CRD + controller) whose
-lifecycle should not be tied to this release. If you install it *after* the
-gateway, restart the gateway so it re-detects the served API.
-
-### Chart
-
-One command installs a complete, working stack — gateway, OIDC issuer, and
-operator, already wired together:
-
-```bash
-helm install openshell deploy/charts/openshell-operator \
-  --namespace openshell-system --create-namespace
-```
-
-By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell
-gateway as a subchart, stands up a small static OIDC issuer that mints the
-operator's admin bearer, and points the operator at the gateway over TLS — no
-external gateway, IdP, or manual config. The bundled gateway self-signs its
-TLS (no cert-manager), uses an ephemeral SQLite store, and takes a fixed
-in-cluster identity, so it's meant for one release per namespace and for
-dev/demo rather than production.
-
-**Bring your own gateway** with `--set gateway.bundled=false --set
-gateway.endpoint=https://your-gateway:8080`. The chart then installs just the
-operator (and, by default, the issuer), and the install notes print the
-`issuer`/`audience`/`admin_role` values to configure your gateway to trust the
-issuer. Or set `auth.mode=byo` to mount your own token Secret
-(`auth.byo.tokenSecret`) instead of the bundled issuer. See
-[`docs/operator-auth.md`](docs/operator-auth.md) for the design.
-
-`operator.deployStandalone=false` installs only the CRDs and RBAC (for
-embedding the operator container elsewhere; pair with `gateway.bundled=false`).
-
-**High availability.** Leader election is on by default, so scaling the operator
-is safe: `--set replicaCount=3` runs three replicas that contend for a
-`coordination.k8s.io` Lease and let only the holder reconcile while the rest
-stand by, so a rolling update or node loss fails over cleanly. The container
-serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as
-probes; readiness does not gate on leadership, so standbys report ready and
-never stall a rollout.
-
-Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`,
-`auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`,
-`crds.install`, `operator.deployStandalone`, `replicaCount`,
-`leaderElection.enabled`, `resources`.
-
 ## Architecture
 
 The operator is a thin, declarative front-end over the gateway's gRPC control
@@ -385,31 +380,12 @@ JWTs, are confined to the data plane without any additional proxy. See
 ```bash
 cargo build
 cargo test
-cargo clippy --all-targets   # pedantic + nursery; keep it clean
-cargo fmt --check
-
-# Regenerate the CRD manifests from the Rust types
-cargo run --bin crdgen > deploy/charts/openshell-operator/files/crds.yaml
-
-# Run against the current kubecontext. Expects a gateway at
-# $OPENSHELL_GATEWAY_ENDPOINT (default http://127.0.0.1:8080).
-cargo run --bin openshell-operator
+cargo run --bin openshell-operator   # against the current kubecontext; expects a
+                                      # gateway at $OPENSHELL_GATEWAY_ENDPOINT
 ```
 
-The toolchain is pinned to the project's MSRV (`rust-toolchain.toml`, mirrored in
-`mise.toml` for mise users) so local `clippy`/`fmt` match CI — nursery lints like
-`cognitive_complexity` drift between compiler versions, so an unpinned newer
-toolchain can pass locally yet fail CI.
-
-Enable the git hooks once per clone (`core.hooksPath` is not stored in the
-repo): a pre-commit `fmt` + `clippy` gate, and a `commit-msg` check that
-enforces [Conventional Commits](https://www.conventionalcommits.org) so
-release-please can derive versions + changelog. CI enforces the same (the
-`commits` job), so hooks are for fast local feedback.
-
-```bash
-git config core.hooksPath .githooks
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full verification gate, the pinned
+toolchain, the git hooks, CRD regeneration, and commit conventions.
 
 `openshell-sdk` and `openshell-core` are consumed as git dependencies pinned to
 an exact revision of NVIDIA/OpenShell `main`.
@@ -432,4 +408,6 @@ within `0.x` until a deliberate `1.0.0`).
 
 ## License
 
-Apache-2.0.
+Apache-2.0 — see [LICENSE](LICENSE). Contributions welcome: see
+[CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md);
+report vulnerabilities per [SECURITY.md](SECURITY.md).
