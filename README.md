@@ -408,6 +408,4 @@ within `0.x` until a deliberate `1.0.0`).
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE). Contributions welcome: see
-[CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md);
-report vulnerabilities per [SECURITY.md](SECURITY.md).
+Apache-2.0 — see [LICENSE](LICENSE).
