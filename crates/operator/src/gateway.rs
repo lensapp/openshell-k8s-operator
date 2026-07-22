@@ -9,14 +9,20 @@
 //! implementation backed by `openshell-sdk`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use openshell_sdk::raw::AuthedGrpcClient;
 use openshell_sdk::raw::proto::{
     self, AttachSandboxProviderRequest, CreateProviderRequest, CreateSandboxRequest,
     DeleteProviderRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
     UpdateConfigRequest, UpdateProviderRequest,
 };
-use openshell_sdk::{AuthConfig, ClientConfig, OpenShellClient, SandboxPhase, SdkError};
+use openshell_sdk::{
+    AuthConfig, ClientConfig, OpenShellClient, Refresh, RefreshError, RefreshedToken, SandboxPhase,
+    SdkError,
+};
 use tonic::Code;
 
 use crate::credentials::{MaterialSpec, RefreshPlan, RefreshSpec, RefreshStrategy};
@@ -177,8 +183,9 @@ const DEFAULT_GATEWAY_ENDPOINT: &str = "http://127.0.0.1:8080";
 ///
 /// The operator authenticates as an OIDC `User` (admin) with a long-lived
 /// bearer minted by the bundled issuer (see `docs/operator-auth.md`). Resolved
-/// from the environment the chart injects; file-backed fields are read once at
-/// startup.
+/// from the environment the chart injects. The CA is read once at startup; the
+/// bearer token is re-read on demand (see [`FileTokenRefresher`]) so a rotated
+/// token is picked up without restarting the operator.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct GatewayConfig {
@@ -187,6 +194,10 @@ pub struct GatewayConfig {
     /// Bearer token. `None` connects anonymously (only usable against a gateway
     /// that allows unauthenticated access).
     pub token: Option<String>,
+    /// Path the bearer was read from, if any. Retained so the client can
+    /// re-read it as the platform rotates the token (a projected `ServiceAccount`
+    /// token, or a Secret an external refresher rewrites).
+    pub token_path: Option<String>,
     /// PEM CA bundle for a private-CA gateway. `None` uses the system roots.
     pub ca_cert: Option<Vec<u8>>,
     /// Skip TLS verification (development only).
@@ -205,13 +216,19 @@ impl GatewayConfig {
     pub fn from_env() -> Result<Self> {
         let endpoint = std::env::var("OPENSHELL_GATEWAY_ENDPOINT")
             .unwrap_or_else(|_| DEFAULT_GATEWAY_ENDPOINT.to_string());
-        let token = read_optional_file("OPENSHELL_TOKEN_FILE")?.map(|t| t.trim().to_string());
+        let token_path = std::env::var("OPENSHELL_TOKEN_FILE").ok();
+        let token = token_path
+            .as_deref()
+            .map(|path| read_file("OPENSHELL_TOKEN_FILE", path))
+            .transpose()?
+            .map(|t| t.trim().to_string());
         let ca_cert = read_optional_file("OPENSHELL_CA_FILE")?.map(String::into_bytes);
         let insecure_skip_verify = std::env::var("OPENSHELL_INSECURE_SKIP_VERIFY")
             .is_ok_and(|v| v.eq_ignore_ascii_case("true"));
         Ok(Self {
             endpoint,
             token,
+            token_path,
             ca_cert,
             insecure_skip_verify,
         })
@@ -235,6 +252,63 @@ fn read_file(key: &str, path: &str) -> Result<String> {
     })
 }
 
+/// How long the SDK may cache the bearer before re-reading the token file.
+///
+/// This is a poll interval, not the token's real lifetime: the mounted file is
+/// re-read this often (minus the SDK's refresh skew) so a rotated token reaches
+/// the live bearer slot before the previous one expires. Kept short because
+/// re-reading a local file is cheap, and short enough to cover the smallest
+/// projected-token TTL Kubernetes allows.
+const TOKEN_RECHECK: Duration = Duration::from_secs(120);
+
+/// Absolute time (Unix seconds) at which a just-read token should be re-read.
+fn recheck_at() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_add(TOKEN_RECHECK.as_secs())
+}
+
+/// [`Refresh`] that re-reads the bearer from its mounted file.
+///
+/// The operator's token is a file the platform keeps current — a projected
+/// `ServiceAccount` token the kubelet rotates, or a Secret an external refresher
+/// rewrites — so "refreshing" is re-reading the file, not talking to an `IdP`.
+/// The SDK drives this proactively before the advertised expiry, so a
+/// long-running operator picks up a rotated token without a restart.
+struct FileTokenRefresher {
+    path: String,
+}
+
+#[async_trait]
+impl Refresh for FileTokenRefresher {
+    async fn refresh(&self) -> std::result::Result<RefreshedToken, RefreshError> {
+        // A missing/half-written file is transient — the kubelet may be
+        // mid-rotation — so the SDK should retry rather than give up.
+        let token = std::fs::read_to_string(&self.path).map_err(|source| {
+            RefreshError::Transient(format!("re-reading token file {}: {source}", self.path))
+        })?;
+        Ok(RefreshedToken::new(token.trim()).with_expires_at(recheck_at()))
+    }
+}
+
+/// Build the SDK auth config from the resolved token.
+///
+/// A file-backed token wires a [`FileTokenRefresher`] so the bearer rotates in
+/// place; a token with no known file (or none at all) stays static.
+fn build_auth(token: Option<String>, token_path: Option<String>) -> Option<AuthConfig> {
+    match (token, token_path) {
+        (Some(token), Some(path)) => Some(AuthConfig::Oidc {
+            token,
+            expires_at: Some(recheck_at()),
+            refresh: Some(Arc::new(FileTokenRefresher { path })),
+        }),
+        (Some(token), None) => Some(AuthConfig::oidc(token)),
+        (None, _) => None,
+    }
+}
+
 /// [`Gateway`] backed by the real `openshell-sdk` client.
 pub struct SdkGateway {
     client: OpenShellClient,
@@ -248,11 +322,21 @@ impl SdkGateway {
     /// the client connects anonymously.
     pub async fn connect(config: GatewayConfig) -> Result<Self> {
         let mut client_config = ClientConfig::new(config.endpoint);
-        client_config.auth = config.token.map(AuthConfig::oidc);
+        client_config.auth = build_auth(config.token, config.token_path);
         client_config.ca_cert = config.ca_cert;
         client_config.insecure_skip_verify = config.insecure_skip_verify;
         let client = OpenShellClient::connect(client_config).await?;
         Ok(Self { client })
+    }
+
+    /// Authenticated raw gRPC client with a proactively-refreshed bearer.
+    ///
+    /// Unlike `raw_grpc`, this re-reads a rotated token into the shared bearer
+    /// slot before the old one expires (see [`FileTokenRefresher`]). Every raw
+    /// RPC dials through here, so a long-lived operator is never pinned to the
+    /// token it read at startup.
+    async fn grpc(&self) -> Result<AuthedGrpcClient> {
+        Ok(self.client.raw_grpc_fresh().await?)
     }
 }
 
@@ -263,7 +347,7 @@ impl Gateway for SdkGateway {
         // request. This mirrors the SDK's own request-builder (image into the
         // template, gpu into resource requirements) and adds the policy.
         let request = create_sandbox_request(create);
-        let response = self.client.raw_grpc().create_sandbox(request).await?;
+        let response = self.grpc().await?.create_sandbox(request).await?;
         let sandbox = response.into_inner().sandbox.ok_or_else(|| {
             Error::Gateway(SdkError::invalid_config(
                 "sandbox missing from gateway response",
@@ -276,7 +360,7 @@ impl Gateway for SdkGateway {
         // Use the raw client so the full spec (current providers) and metadata
         // (resource version) come back for convergence — the curated
         // `get_sandbox` projects those away.
-        let mut grpc = self.client.raw_grpc();
+        let mut grpc = self.grpc().await?;
         match grpc
             .get_sandbox(GetSandboxRequest {
                 name: name.to_owned(),
@@ -294,8 +378,8 @@ impl Gateway for SdkGateway {
     }
 
     async fn attach_provider(&self, sandbox: &str, provider: &str) -> Result<()> {
-        self.client
-            .raw_grpc()
+        self.grpc()
+            .await?
             .attach_sandbox_provider(AttachSandboxProviderRequest {
                 sandbox_name: sandbox.to_owned(),
                 provider_name: provider.to_owned(),
@@ -310,8 +394,8 @@ impl Gateway for SdkGateway {
     }
 
     async fn detach_provider(&self, sandbox: &str, provider: &str) -> Result<()> {
-        self.client
-            .raw_grpc()
+        self.grpc()
+            .await?
             .detach_sandbox_provider(DetachSandboxProviderRequest {
                 sandbox_name: sandbox.to_owned(),
                 provider_name: provider.to_owned(),
@@ -330,7 +414,7 @@ impl Gateway for SdkGateway {
             expected_resource_version: 0,
             ..UpdateConfigRequest::default()
         };
-        match self.client.raw_grpc().update_config(request).await {
+        match self.grpc().await?.update_config(request).await {
             Ok(_) => Ok(()),
             // The gateway signals a forbidden (non-additive) policy change with
             // `InvalidArgument`. Surface it as a terminal error so it doesn't
@@ -343,7 +427,7 @@ impl Gateway for SdkGateway {
     }
 
     async fn upsert_provider(&self, input: ProviderInput) -> Result<()> {
-        let mut grpc = self.client.raw_grpc();
+        let mut grpc = self.grpc().await?;
 
         // Fetch any existing provider to decide create-vs-update and carry its
         // metadata (id, resource_version) into the update.
@@ -391,7 +475,7 @@ impl Gateway for SdkGateway {
     }
 
     async fn delete_provider(&self, name: &str) -> Result<bool> {
-        let mut grpc = self.client.raw_grpc();
+        let mut grpc = self.grpc().await?;
         let response = grpc
             .delete_provider(DeleteProviderRequest {
                 name: name.to_owned(),
@@ -401,7 +485,7 @@ impl Gateway for SdkGateway {
     }
 
     async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfileView>> {
-        let mut grpc = self.client.raw_grpc();
+        let mut grpc = self.grpc().await?;
         let response = grpc
             .list_provider_profiles(proto::ListProviderProfilesRequest::default())
             .await?;
@@ -414,7 +498,7 @@ impl Gateway for SdkGateway {
     }
 
     async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()> {
-        let mut grpc = self.client.raw_grpc();
+        let mut grpc = self.grpc().await?;
         grpc.configure_provider_refresh(proto::ConfigureProviderRefreshRequest {
             provider: input.provider,
             credential_key: input.credential_key,
@@ -605,9 +689,81 @@ fn json_value_to_prost(value: serde_json::Value) -> prost_types::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_sandbox_request, json_value_to_struct, read_file};
+    use super::{
+        FileTokenRefresher, build_auth, create_sandbox_request, json_value_to_struct, read_file,
+    };
     use crate::gateway::SandboxCreate;
+    use openshell_sdk::{AuthConfig, Refresh};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn file_token_refresher_rereads_rotated_file() {
+        // The whole point of the refresher: a token rewritten on disk (a
+        // rotated projected token, or a refreshed Secret) is observed on the
+        // next refresh without recreating the client.
+        let path = std::env::temp_dir().join(format!("openshell-refresh-{}", std::process::id()));
+        std::fs::write(&path, "token-one\n").expect("write initial token");
+        let refresher = FileTokenRefresher {
+            path: path.to_str().unwrap().to_owned(),
+        };
+
+        let first = refresher.refresh().await.expect("initial read");
+        assert_eq!(first.access_token, "token-one");
+        assert!(
+            first.expires_at.is_some(),
+            "expiry drives proactive refresh"
+        );
+
+        std::fs::write(&path, "token-two\n").expect("rotate token");
+        let second = refresher.refresh().await.expect("re-read");
+        assert_eq!(
+            second.access_token, "token-two",
+            "picks up the rotated token"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn file_token_refresher_missing_file_is_transient() {
+        // A vanished file (mid-rotation) must be retryable, not terminal, so
+        // the SDK backs off and retries instead of failing the connection.
+        let refresher = FileTokenRefresher {
+            path: "/nonexistent/openshell/token".to_owned(),
+        };
+        let err = refresher.refresh().await.expect_err("missing file errors");
+        assert!(matches!(err, openshell_sdk::RefreshError::Transient(_)));
+    }
+
+    #[test]
+    fn build_auth_wires_refresher_only_for_file_backed_token() {
+        // File-backed token → refresher + expiry (rotates in place).
+        match build_auth(Some("tok".to_owned()), Some("/run/token".to_owned())) {
+            Some(AuthConfig::Oidc {
+                refresh,
+                expires_at,
+                ..
+            }) => {
+                assert!(refresh.is_some(), "file-backed token wires a refresher");
+                assert!(expires_at.is_some(), "expiry set so refresh triggers");
+            }
+            _ => panic!("expected an Oidc auth config"),
+        }
+
+        // Token with no file → static bearer, no refresher.
+        match build_auth(Some("tok".to_owned()), None) {
+            Some(AuthConfig::Oidc { refresh, .. }) => {
+                assert!(refresh.is_none(), "a fileless token stays static");
+            }
+            _ => panic!("expected an Oidc auth config"),
+        }
+
+        // No token → anonymous.
+        assert!(
+            build_auth(None, None).is_none(),
+            "no token connects anonymously"
+        );
+    }
 
     #[test]
     fn read_file_returns_contents_for_trimming() {
