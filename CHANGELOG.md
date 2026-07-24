@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.3.0...v0.4.0) (2026-07-24)
+
+
+### Features
+
+* add OpenShellProviderProfile CRD ([91d51cb](https://github.com/lensapp/openshell-k8s-operator/commit/91d51cb151be7348e21402345a21d616fc6db616))
+* enforce type/workspace immutability with CEL ([4ad7ada](https://github.com/lensapp/openshell-k8s-operator/commit/4ad7adad4f28e8018a705c5037f3a80be591706b))
+
 ## [0.3.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.2.0...v0.3.0) (2026-07-24)
 
 
