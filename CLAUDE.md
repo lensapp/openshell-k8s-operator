@@ -12,12 +12,15 @@ reimplement the gateway.
 Status: `OpenShellSandbox` (create/get/delete), `Provider` (static credentials
 from a Secret, entitlement-checked, synced with a rotation watch), `Policy`
 (a reusable policy document validated by the gateway parser and applied to a
-sandbox at creation via `policyRef`), and `OpenShellWorkspace` (a cluster-scoped
+sandbox at creation via `policyRef`), `OpenShellWorkspace` (a cluster-scoped
 gateway tenancy boundary with declarative membership, joined by sandboxes and
-providers via `spec.workspace`) reconcilers. Sandbox, Provider, and Workspace
-use finalizer-based cleanup; Policy owns no gateway state, so it has none.
-Providers v2 (profiles + gateway-managed OAuth2 refresh) is deferred to a
-separate future CRD.
+providers via `spec.workspace`), and `OpenShellProviderProfile` (a
+cluster-scoped, platform-scoped provider *type* definition — spine-typed with
+opaque arrays validated by the gateway's `openshell-providers` parser, imported
+and updated in place) reconcilers. Sandbox, Provider, Workspace, and
+ProviderProfile use finalizer-based cleanup; Policy owns no gateway state, so it
+has none. Workspace-scoped provider profiles, and Providers v2 (gateway-managed
+OAuth2 refresh), are deferred.
 
 The repo is a Cargo workspace with two crates: `crates/operator` (the operator)
 and `crates/issuer` (a small static OIDC issuer — `mint` + `serve` subcommands —
@@ -52,7 +55,7 @@ A Cargo workspace with two crates.
   gateway dependency. The reconcilers (`controllers/`, one loop per resource)
   depend on a `Gateway` trait (`gateway.rs`) so loops are unit-testable and the
   SDK is a swappable detail; conversion/validation helpers (`secret.rs`,
-  `policy.rs`, `volumes.rs`) are pure and tested in isolation. Runtime concerns
+  `policy.rs`, `profile.rs`, `volumes.rs`) are pure and tested in isolation. Runtime concerns
   live in their own modules (`leader.rs` election, `health.rs` probes).
 - `crates/issuer/` — the bundled OIDC issuer, one binary with `mint` (generate
   key, mint the operator's bearer, publish JWKS) and `serve` (OIDC discovery +

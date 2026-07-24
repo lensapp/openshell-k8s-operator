@@ -19,6 +19,7 @@ use crate::gateway::Gateway;
 
 pub mod policy;
 pub mod provider;
+pub mod provider_profile;
 pub mod sandbox;
 pub mod workspace;
 
@@ -62,7 +63,8 @@ pub async fn run(kube: Client, gateway: Arc<dyn Gateway>) -> Result<()> {
         sandbox::run(context.clone()),
         provider::run(context.clone()),
         policy::run(context.clone()),
-        workspace::run(context),
+        workspace::run(context.clone()),
+        provider_profile::run(context),
     );
     Ok(())
 }

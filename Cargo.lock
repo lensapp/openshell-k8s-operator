@@ -1659,6 +1659,7 @@ dependencies = [
  "kube",
  "openshell-core",
  "openshell-policy",
+ "openshell-providers",
  "openshell-sdk",
  "prost-types",
  "rcgen",
@@ -1686,6 +1687,20 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yml",
+]
+
+[[package]]
+name = "openshell-providers"
+version = "0.0.0"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.90#1d4ac708f1d2a9ab94204cdce6ca0eee7e792839"
+dependencies = [
+ "glob",
+ "openshell-core",
+ "serde",
+ "serde_json",
+ "serde_yml",
+ "thiserror 2.0.18",
+ "url",
 ]
 
 [[package]]

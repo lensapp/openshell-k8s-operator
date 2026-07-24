@@ -126,6 +126,30 @@ pub enum Error {
         count: usize,
     },
 
+    /// An `OpenShellProviderProfile` document failed to parse or validate
+    /// against the gateway's `openshell-providers` schema. The message is the
+    /// parser's diagnostic. Terminal: it only clears when the spec is edited.
+    #[error("invalid provider profile: {0}")]
+    ProfileInvalid(String),
+
+    /// The gateway rejected a provider-profile import or update. The message is
+    /// the gateway's diagnostics. Not terminal: a stale resource-version
+    /// conflict resolves once the reconcile re-reads the current version.
+    #[error("gateway rejected provider profile: {0}")]
+    ProfileRejected(String),
+
+    /// An `OpenShellProviderProfile` cannot be deleted because `OpenShellProvider`
+    /// resources still select this type. Deleting it would break their
+    /// credential handling, so the finalizer refuses until none remain.
+    /// Transient — it clears once the referencing providers are removed.
+    #[error("provider profile {id} still selected by {count} provider(s); not deleting")]
+    ProfileInUse {
+        /// Profile id (the resource name).
+        id: String,
+        /// Number of providers still selecting this type.
+        count: usize,
+    },
+
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),
@@ -158,6 +182,9 @@ impl Error {
             Self::VolumeInvalid(_) => "VolumeInvalid",
             Self::RecreateTimeout { .. } => "RecreateTimeout",
             Self::WorkspaceNotEmpty { .. } => "WorkspaceNotEmpty",
+            Self::ProfileInvalid(_) => "ProfileInvalid",
+            Self::ProfileRejected(_) => "ProfileRejected",
+            Self::ProfileInUse { .. } => "ProfileInUse",
             Self::Finalizer(_) => "FinalizerError",
             Self::LeadershipLost(_) => "LeadershipLost",
         }
@@ -170,11 +197,62 @@ impl Error {
     /// `.metadata.generation` and re-triggers reconcile anyway. (`PolicyNotFound`
     /// is deliberately *not* terminal: the referenced policy may appear later,
     /// and requeueing lets the sandbox recover once it does.)
+    ///
+    /// Every reconciler runs inside the finalizer machinery, which wraps the
+    /// real error in [`Self::Finalizer`] before the error policy sees it — so
+    /// this looks *through* that wrapper (an apply/cleanup failure carries the
+    /// underlying error), otherwise the terminal set below would never match.
     #[must_use]
-    pub const fn is_terminal(&self) -> bool {
+    pub fn is_terminal(&self) -> bool {
+        use kube::runtime::finalizer::Error as FinalizerError;
+        if let Self::Finalizer(err) = self {
+            return match err.as_ref() {
+                FinalizerError::ApplyFailed(inner) | FinalizerError::CleanupFailed(inner) => {
+                    inner.is_terminal()
+                }
+                _ => false,
+            };
+        }
         matches!(
             self,
-            Self::PolicySourceConflict | Self::VolumeInvalid(_) | Self::PolicyUpdateRejected(_)
+            Self::PolicySourceConflict
+                | Self::VolumeInvalid(_)
+                | Self::PolicyUpdateRejected(_)
+                | Self::ProfileInvalid(_)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+    use kube::runtime::finalizer::Error as FinalizerError;
+
+    fn finalizer(inner: Error) -> Error {
+        Error::Finalizer(Box::new(FinalizerError::ApplyFailed(inner)))
+    }
+
+    #[test]
+    fn terminal_is_seen_through_the_finalizer_wrapper() {
+        // Every reconciler wraps the real error before the error policy sees it,
+        // so a terminal error must still read as terminal once wrapped.
+        assert!(Error::ProfileInvalid("bad".to_owned()).is_terminal());
+        assert!(finalizer(Error::ProfileInvalid("bad".to_owned())).is_terminal());
+        assert!(
+            finalizer(Error::VolumeInvalid("bad".to_owned())).is_terminal(),
+            "the same unwrap fixes the sandbox controller's terminal errors"
+        );
+    }
+
+    #[test]
+    fn transient_errors_are_not_terminal_even_when_wrapped() {
+        assert!(!Error::MissingNamespace.is_terminal());
+        assert!(
+            !finalizer(Error::ProfileInUse {
+                id: "acme".to_owned(),
+                count: 1,
+            })
+            .is_terminal()
+        );
     }
 }

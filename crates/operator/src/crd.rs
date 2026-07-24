@@ -575,3 +575,100 @@ pub enum WorkspacePhase {
     /// Workspace is being torn down on the gateway.
     Terminating,
 }
+
+/// A provider *type* definition — the schema/template a gateway provider is an
+/// instance of (an `OpenShellProvider` selects one by name via `spec.type`).
+///
+/// **Cluster-scoped and platform-only** in this version: the resource's
+/// `metadata.name` *is* the gateway profile id (lowercase kebab-case), and the
+/// profile is imported at the gateway's platform scope, shared across every
+/// workspace. Workspace-scoped profiles are deferred to a future revision.
+///
+/// Like `OpenShellPolicy`, only the stable *spine* (`displayName`,
+/// `description`, `category`, `inferenceCapable`) is typed; the large,
+/// fast-moving arrays (`credentials`, `endpoints`, `binaries`, `discovery`) are
+/// left opaque (preserve-unknown) and validated wholesale by the gateway's own
+/// `openshell-providers` parser at reconcile time, rather than mirrored — and
+/// inevitably drifting — here. Those blocks use the gateway's native
+/// `snake_case` profile schema (e.g. `env_vars`, `auth_style`, `token_url`).
+///
+/// The operator imports the profile on the gateway and updates it in place on
+/// change (optimistic-concurrency by the gateway's stored resource version). It
+/// owns gateway state, so a finalizer guards deletion: it refuses while any
+/// `OpenShellProvider` still selects this type (deleting a profile out from under
+/// live providers would break their credential handling).
+#[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[kube(
+    group = "openshell.lenshq.io",
+    version = "v1alpha1",
+    kind = "OpenShellProviderProfile",
+    status = "OpenShellProviderProfileStatus",
+    shortname = "ospp",
+    printcolumn = r#"{"name":"Category","type":"string","jsonPath":".spec.category"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenShellProviderProfileSpec {
+    /// Human-readable name for the profile (the gateway's `display_name`).
+    pub display_name: String,
+
+    /// Longer description of the provider type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Grouping category (e.g. `inference`, `agent`, `source_control`,
+    /// `messaging`, `data`, `knowledge`, `other`). Validated by the gateway
+    /// parser; an unsupported value is rejected at reconcile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+
+    /// Whether providers of this type can serve model inference.
+    #[serde(default)]
+    pub inference_capable: bool,
+
+    /// Credential declarations, in the gateway's `snake_case` profile schema.
+    /// Passed through verbatim to the gateway parser (see the type-level note).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<PreservedValue>,
+
+    /// Network endpoint declarations, in the gateway's `snake_case` schema.
+    /// Passed through verbatim to the gateway parser.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<PreservedValue>,
+
+    /// Binary declarations, in the gateway's `snake_case` schema. Passed
+    /// through verbatim to the gateway parser.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binaries: Vec<PreservedValue>,
+
+    /// Local credential-discovery declaration, in the gateway's `snake_case`
+    /// schema. Passed through verbatim to the gateway parser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discovery: Option<PreservedValue>,
+
+    /// Non-secret annotations attached to the stored profile.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annotations: BTreeMap<String, String>,
+}
+
+/// Observed state mirrored from the gateway for an `OpenShellProviderProfile`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenShellProviderProfileStatus {
+    /// Standard conditions; the `Ready` condition is `True` when the profile
+    /// parsed, validated, and imported/updated on the gateway, and `False` with
+    /// the diagnostic in `message` otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+
+    /// `.metadata.generation` last reconciled, for GitOps health checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+
+    /// The gateway's stored resource version for the profile, once imported.
+    /// Informational; the operator re-reads it each reconcile to drive the
+    /// update's optimistic-concurrency check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_version: Option<u64>,
+}

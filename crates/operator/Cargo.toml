@@ -64,6 +64,9 @@ openshell-core = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.90" 
 # Canonical policy schema parser/validator; the single source of truth for
 # translating policy documents into the proto `SandboxPolicy`.
 openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.90" }
+# Canonical provider-profile schema parser/validator; the single source of truth
+# for translating profile documents into the proto `ProviderProfile`.
+openshell-providers = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.90" }
 
 # `ServiceExt::oneshot` drives the health router in tests without a socket.
 [dev-dependencies]
