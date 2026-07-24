@@ -135,6 +135,41 @@ them in sync with the constants in src/webhook.rs.
 {{- define "openshell-operator.webhookServiceName" -}}
 {{- printf "%s-webhook" (include "openshell-operator.fullname" .) -}}
 {{- end -}}
+
+{{/*
+Whether exec-confinement is on. Unset (null) follows gateway.bundled: the bundled
+install knows where sandboxes land and confines by default; BYO is opt-in. An
+explicit true/false wins. Returns the string "true" or "false".
+*/}}
+{{- define "openshell-operator.webhookEnabled" -}}
+{{- $enabled := .Values.webhook.execConfinement.enabled -}}
+{{- if kindIs "invalid" $enabled -}}
+{{- .Values.gateway.bundled -}}
+{{- else -}}
+{{- $enabled -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+namespaceSelector matchExpressions for the webhooks. Bundled: scope to exactly
+the release namespace (where the bundled gateway places sandboxes) via the
+built-in metadata.name label — no manual labelling. BYO: confine namespaces the
+admin opted in by label, and never control-plane namespaces.
+*/}}
+{{- define "openshell-operator.webhookNsMatchExpressions" -}}
+{{- if .Values.gateway.bundled -}}
+- key: kubernetes.io/metadata.name
+  operator: In
+  values: ["{{ .Release.Namespace }}"]
+{{- else -}}
+- key: {{ .Values.webhook.execConfinement.namespaceLabel }}
+  operator: In
+  values: ["enabled"]
+- key: kubernetes.io/metadata.name
+  operator: NotIn
+  values: ["kube-system", "kube-node-lease"]
+{{- end -}}
+{{- end -}}
 {{- define "openshell-operator.webhookSecretName" -}}
 {{- printf "%s-webhook-tls" (include "openshell-operator.fullname" .) -}}
 {{- end -}}

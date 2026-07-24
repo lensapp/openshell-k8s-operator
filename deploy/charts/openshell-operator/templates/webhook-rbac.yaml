@@ -1,4 +1,4 @@
-{{- if .Values.webhook.execConfinement.enabled -}}
+{{- if eq (include "openshell-operator.webhookEnabled" .) "true" -}}
 # The webhook self-manages its serving cert: it creates the cert Secret in the
 # operator's own namespace on first start. Namespaced (not cluster-wide) create.
 # get/list/watch on secrets is already granted cluster-wide by the ClusterRole.

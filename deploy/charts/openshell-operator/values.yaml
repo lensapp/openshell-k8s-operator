@@ -104,21 +104,24 @@ auth:
 # as root, outside the per-process confinement the supervisor applies to the
 # workload. When enabled, a mutating webhook rewrites exec into sandbox pods to
 # re-enter the sandbox (dropping to the sandbox user under Landlock), and a
-# validating webhook denies attach / `kubectl debug`, which would bypass it.
-#
-# Opt-in and off by default: it is a cluster admission webhook, and with the
-# default fail-closed policy an operator outage blocks exec/attach — but only in
-# namespaces you explicitly label (see namespaceLabel). Pod creation and every
-# other namespace are never affected. The operator must run as its own
-# Deployment (operator.deployStandalone=true) to serve it.
+# validating webhook denies attach / `kubectl debug`, which would bypass it. The
+# operator must run as its own Deployment (operator.deployStandalone=true).
 webhook:
   execConfinement:
-    enabled: false
-    # Only namespaces carrying `<namespaceLabel>: "enabled"` are subject to the
-    # webhook. This bounds the fail-closed blast radius to namespaces you opt in.
+    # Whether to confine sandbox exec. Left unset (null), it follows
+    # gateway.bundled: ON for the bundled batteries-included install — the
+    # operator knows sandboxes land in the release namespace (the gateway's
+    # sandbox_namespace) and scopes the webhook to exactly it, no labelling
+    # needed — and OFF for a bring-your-own gateway, whose sandbox placement is
+    # outside our control (opt in explicitly and label the namespaces). Set
+    # true/false to override the gateway.bundled-derived default.
+    enabled: null
+    # Bring-your-own only: namespaces carrying `<namespaceLabel>: "enabled"` are
+    # confined, which bounds the fail-closed blast radius to namespaces you opt
+    # in. Ignored in bundled mode (the release namespace is scoped directly).
     namespaceLabel: openshell.lenshq.io/exec-confinement
     # failurePolicy for both webhooks. Fail (fail-closed) is the secure default:
-    # if the operator is unreachable, exec/attach into labelled namespaces is
+    # if the operator is unreachable, exec/attach into confined namespaces is
     # denied rather than falling back to an unconfined root shell. Set to Ignore
     # to fail open (reopens root exec whenever the webhook is down).
     failurePolicy: Fail

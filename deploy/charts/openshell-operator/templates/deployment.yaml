@@ -40,7 +40,7 @@ spec:
             - name: health
               containerPort: 8080
               protocol: TCP
-            {{- if .Values.webhook.execConfinement.enabled }}
+            {{- if eq (include "openshell-operator.webhookEnabled" .) "true" }}
             - name: webhook
               containerPort: {{ .Values.webhook.execConfinement.port }}
               protocol: TCP
@@ -91,7 +91,7 @@ spec:
             - name: OPENSHELL_INSECURE_SKIP_VERIFY
               value: "true"
             {{- end }}
-            {{- if .Values.webhook.execConfinement.enabled }}
+            {{- if eq (include "openshell-operator.webhookEnabled" .) "true" }}
             # Admission webhook: the operator serves it, self-issues the cert
             # into the Secret, and injects the caBundle into the two configs.
             - name: OPENSHELL_WEBHOOK_ENABLED
