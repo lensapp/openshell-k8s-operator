@@ -38,7 +38,7 @@ By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell ga
 
 **High availability.** Leader election is on by default, so scaling the operator is safe: `--set replicaCount=3` runs three replicas that contend for a `coordination.k8s.io` Lease and let only the holder reconcile while the rest stand by, so a rolling update or node loss fails over cleanly. The container serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as probes; readiness does not gate on leadership, so standbys report ready and never stall a rollout.
 
-Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`, `crds.install`, `operator.deployStandalone`, `replicaCount`, `leaderElection.enabled`, `resources`.
+Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`, `crds.install`, `operator.deployStandalone`, `replicaCount`, `leaderElection.enabled`, `webhook.execConfinement.enabled`, `resources`.
 
 ## Example
 
@@ -233,6 +233,12 @@ Every resource reports reconcile health the standard way, so existing tooling ju
 - **Kubernetes events** are the transient breadcrumb trail. Reconcile failures emit a `Warning` event against the resource, visible in `kubectl describe`. Events expire; conditions do not — so conditions, not events, are what automation should key on.
 
 The `OpenShellSandbox` additionally mirrors the gateway's own lifecycle in `.status.phase` (a separate axis from `Ready`, much like `Pod.status.phase`).
+
+## Confined `kubectl exec`
+
+A sandbox's agent container runs privileged, so a plain `kubectl exec` lands as **root, outside** the per-process confinement the supervisor applies to the workload — bypassing the sandbox. An optional admission webhook, served by the operator, closes that: a mutating webhook on `pods/exec` rewrites the command to re-enter the sandbox via the supervisor (dropping to the sandbox user under Landlock, policy re-derived from the live gateway), and a validating webhook denies `kubectl attach` / `kubectl debug`, which would otherwise sidestep it. It works in the default topology — no privileged-container change needed.
+
+`webhook.execConfinement.enabled` defaults to `gateway.bundled`: **on** for the bundled install (the operator knows sandboxes land in the release namespace and scopes the webhook there — nothing to label), **opt-in** for a bring-your-own gateway (enable it and label the sandbox namespaces `openshell.lenshq.io/exec-confinement=enabled`). It is `failurePolicy: Fail` (fail-closed: an operator outage denies exec into confined namespaces rather than reopening a root shell) and self-manages its serving cert — no cert-manager. See [`docs/exec-confinement.md`](docs/exec-confinement.md) for the design.
 
 ## Architecture
 
