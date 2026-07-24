@@ -113,6 +113,19 @@ pub enum Error {
         name: String,
     },
 
+    /// An `OpenShellWorkspace` cannot be deleted because sandboxes or providers
+    /// still reference it. Deleting a non-empty workspace permanently wedges it
+    /// on the gateway (the workspace is marked terminating before the blocker
+    /// check, with no undelete), so the finalizer refuses until it is empty.
+    /// Transient — it clears once the referencing resources are removed.
+    #[error("workspace {name} still has {count} referencing resource(s); not deleting")]
+    WorkspaceNotEmpty {
+        /// Workspace name.
+        name: String,
+        /// Number of sandboxes/providers still referencing the workspace.
+        count: usize,
+    },
+
     /// The finalizer machinery failed to apply or clean up the resource.
     #[error("finalizer error: {0}")]
     Finalizer(#[source] Box<kube::runtime::finalizer::Error<Self>>),
@@ -144,6 +157,7 @@ impl Error {
             Self::PolicyUpdateRejected(_) => "PolicyUpdateRejected",
             Self::VolumeInvalid(_) => "VolumeInvalid",
             Self::RecreateTimeout { .. } => "RecreateTimeout",
+            Self::WorkspaceNotEmpty { .. } => "WorkspaceNotEmpty",
             Self::Finalizer(_) => "FinalizerError",
             Self::LeadershipLost(_) => "LeadershipLost",
         }

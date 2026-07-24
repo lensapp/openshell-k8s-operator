@@ -173,8 +173,15 @@ async fn sync_provider(
         &provider.spec.provider_type,
         credentials,
         provider.spec.config.clone(),
+        workspace_of(provider),
     )
     .await
+}
+
+/// The gateway workspace a provider targets. Empty (the gateway's `default`)
+/// when `spec.workspace` is unset — preserving the pre-workspace behaviour.
+fn workspace_of(provider: &OpenShellProvider) -> &str {
+    provider.spec.workspace.as_deref().unwrap_or_default()
 }
 
 /// Climb the credential ladder and sync the provider to the gateway.
@@ -191,6 +198,7 @@ async fn sync_to_gateway(
     provider_type: &str,
     credentials: BTreeMap<String, String>,
     config: BTreeMap<String, String>,
+    workspace: &str,
 ) -> Result<SyncOutcome> {
     let hash = hash_material(&credentials, &config);
 
@@ -224,6 +232,7 @@ async fn sync_to_gateway(
             provider_type: provider_type.to_owned(),
             credentials: plan.static_credentials,
             config,
+            workspace: workspace.to_owned(),
         })
         .await?;
 
@@ -238,6 +247,7 @@ async fn sync_to_gateway(
                 provider: name.to_owned(),
                 credential_key: refresh.credential_key,
                 plan: refresh.plan,
+                workspace: workspace.to_owned(),
             })
             .await?;
     }
@@ -263,7 +273,11 @@ async fn find_profile(
 async fn cleanup(provider: Arc<OpenShellProvider>, ctx: Arc<Context>) -> Result<Action> {
     let name = provider.name_any();
     info!(%name, "deleting provider on gateway");
-    if !ctx.gateway.delete_provider(&name).await? {
+    if !ctx
+        .gateway
+        .delete_provider(&name, workspace_of(&provider))
+        .await?
+    {
         info!(%name, "provider already absent on gateway");
     }
     Ok(Action::await_change())
@@ -326,6 +340,7 @@ mod tests {
     use crate::error::Result;
     use crate::gateway::{
         ConfigureRefreshInput, ProviderInput, ProviderProfileCredential, ProviderProfileView,
+        WorkspaceCreate, WorkspaceMemberView, WorkspaceRole, WorkspaceState,
     };
     use std::collections::BTreeMap;
     use std::sync::Mutex;
@@ -350,22 +365,37 @@ mod tests {
         ) -> Result<crate::gateway::SandboxState> {
             unreachable!("provider controller does not touch sandboxes")
         }
-        async fn get_sandbox(&self, _name: &str) -> Result<Option<crate::gateway::SandboxState>> {
+        async fn get_sandbox(
+            &self,
+            _name: &str,
+            _workspace: &str,
+        ) -> Result<Option<crate::gateway::SandboxState>> {
             unreachable!("provider controller does not touch sandboxes")
         }
-        async fn delete_sandbox(&self, _name: &str) -> Result<bool> {
+        async fn delete_sandbox(&self, _name: &str, _workspace: &str) -> Result<bool> {
             unreachable!("provider controller does not touch sandboxes")
         }
-        async fn attach_provider(&self, _sandbox: &str, _provider: &str) -> Result<()> {
+        async fn attach_provider(
+            &self,
+            _sandbox: &str,
+            _provider: &str,
+            _workspace: &str,
+        ) -> Result<()> {
             unreachable!("provider controller does not touch sandboxes")
         }
-        async fn detach_provider(&self, _sandbox: &str, _provider: &str) -> Result<()> {
+        async fn detach_provider(
+            &self,
+            _sandbox: &str,
+            _provider: &str,
+            _workspace: &str,
+        ) -> Result<()> {
             unreachable!("provider controller does not touch sandboxes")
         }
         async fn update_policy(
             &self,
             _sandbox: &str,
             _policy: openshell_sdk::raw::proto::SandboxPolicy,
+            _workspace: &str,
         ) -> Result<()> {
             unreachable!("provider controller does not touch sandboxes")
         }
@@ -374,7 +404,7 @@ mod tests {
             self.upserted.lock().unwrap().push(input);
             Ok(())
         }
-        async fn delete_provider(&self, name: &str) -> Result<bool> {
+        async fn delete_provider(&self, name: &str, _workspace: &str) -> Result<bool> {
             self.deleted.lock().unwrap().push(name.to_owned());
             Ok(true)
         }
@@ -385,6 +415,32 @@ mod tests {
             self.order.lock().unwrap().push("configure");
             self.configured.lock().unwrap().push(input);
             Ok(())
+        }
+        async fn create_workspace(&self, _create: WorkspaceCreate) -> Result<WorkspaceState> {
+            unreachable!("provider controller does not touch workspaces")
+        }
+        async fn get_workspace(&self, _name: &str) -> Result<Option<WorkspaceState>> {
+            unreachable!("provider controller does not touch workspaces")
+        }
+        async fn delete_workspace(&self, _name: &str) -> Result<bool> {
+            unreachable!("provider controller does not touch workspaces")
+        }
+        async fn list_workspace_members(
+            &self,
+            _workspace: &str,
+        ) -> Result<Vec<WorkspaceMemberView>> {
+            unreachable!("provider controller does not touch workspaces")
+        }
+        async fn add_workspace_member(
+            &self,
+            _workspace: &str,
+            _subject: &str,
+            _role: WorkspaceRole,
+        ) -> Result<()> {
+            unreachable!("provider controller does not touch workspaces")
+        }
+        async fn remove_workspace_member(&self, _workspace: &str, _subject: &str) -> Result<()> {
+            unreachable!("provider controller does not touch workspaces")
         }
     }
 
@@ -398,6 +454,7 @@ mod tests {
                     keys: Vec::new(),
                 },
                 config: BTreeMap::new(),
+                workspace: None,
             },
         );
         p.metadata.namespace = Some(namespace.to_owned());
@@ -463,6 +520,7 @@ mod tests {
             "claude",
             map(&[("API_KEY", "sk-123")]),
             map(&[("region", "us")]),
+            "",
         )
         .await
         .expect("sync");
@@ -492,6 +550,7 @@ mod tests {
             "vertex",
             map(&[("client_id", "id"), ("refresh_token", "rt")]),
             BTreeMap::new(),
+            "",
         )
         .await
         .expect("sync");
@@ -547,6 +606,7 @@ mod tests {
                 ("refresh_token", "rt"),
             ]),
             BTreeMap::new(),
+            "",
         )
         .await
         .expect("sync");

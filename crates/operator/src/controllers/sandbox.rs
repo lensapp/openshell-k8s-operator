@@ -95,6 +95,19 @@ pub async fn run(ctx: Arc<Context>) {
         .await;
 }
 
+/// The gateway workspace a sandbox targets. Empty (the gateway's `default`)
+/// when `spec.workspace` is unset — preserving the pre-workspace behaviour.
+///
+/// The workspace is part of a sandbox's gateway identity, so it is threaded into
+/// every gateway call. It is *not* folded into the immutable fingerprint: it is
+/// immutable (a change would orphan the old `{workspace}--{name}` object rather
+/// than move it), and leaving the fingerprint untouched keeps every existing
+/// sandbox's recorded hash byte-identical across the operator upgrade that adds
+/// this field.
+fn workspace_of(spec: &OpenShellSandboxSpec) -> &str {
+    spec.workspace.as_deref().unwrap_or_default()
+}
+
 /// Whether `sandbox` resolves its policy from `policy_name` in `policy_namespace`.
 fn references_policy(
     sandbox: &OpenShellSandbox,
@@ -247,7 +260,8 @@ async fn converge(
         .as_ref()
         .and_then(|status| status.applied_policy_hash.clone());
 
-    let existing = ctx.gateway.get_sandbox(name).await?;
+    let workspace = workspace_of(&sandbox.spec);
+    let existing = ctx.gateway.get_sandbox(name, workspace).await?;
     let resolved = resolve(ctx, namespace, &sandbox.spec).await;
 
     let Some(existing) = existing else {
@@ -264,7 +278,7 @@ async fn converge(
         Ok(resolved) => resolved,
         Err(err) => {
             warn!(%name, error = %err, "policy unresolved; keeping running sandbox");
-            converge_providers(ctx, name, &sandbox.spec.providers, &existing).await?;
+            converge_providers(ctx, name, &sandbox.spec.providers, &existing, workspace).await?;
             return Err(err);
         }
     };
@@ -275,7 +289,7 @@ async fn converge(
     }
 
     // In-place convergence: providers first, then the policy's mutable fields.
-    converge_providers(ctx, name, &sandbox.spec.providers, &existing).await?;
+    converge_providers(ctx, name, &sandbox.spec.providers, &existing, workspace).await?;
 
     let desired_policy_hash = mutable_policy_fingerprint(resolved.spec.as_ref());
     update_policy_if_drifted(
@@ -364,7 +378,9 @@ async fn update_policy_if_drifted(
                 .to_owned(),
         )
         .await;
-        ctx.gateway.update_policy(name, policy).await?;
+        ctx.gateway
+            .update_policy(name, policy, workspace_of(&sandbox.spec))
+            .await?;
     }
     Ok(())
 }
@@ -381,15 +397,20 @@ async fn converge_providers(
     name: &str,
     desired: &[String],
     existing: &SandboxState,
+    workspace: &str,
 ) -> Result<()> {
     let (attach, detach) = provider_delta(desired, &existing.providers);
     for provider in attach {
         info!(%name, %provider, "attaching provider");
-        ctx.gateway.attach_provider(name, &provider).await?;
+        ctx.gateway
+            .attach_provider(name, &provider, workspace)
+            .await?;
     }
     for provider in detach {
         info!(%name, %provider, "detaching provider");
-        ctx.gateway.detach_provider(name, &provider).await?;
+        ctx.gateway
+            .detach_provider(name, &provider, workspace)
+            .await?;
     }
     Ok(())
 }
@@ -435,9 +456,10 @@ async fn recreate(
     sandbox: &OpenShellSandbox,
     policy: Option<proto::SandboxPolicy>,
 ) -> Result<SandboxState> {
-    ctx.gateway.delete_sandbox(name).await?;
+    let workspace = workspace_of(&sandbox.spec);
+    ctx.gateway.delete_sandbox(name, workspace).await?;
     for _ in 0..RECREATE_POLL_ATTEMPTS {
-        if ctx.gateway.get_sandbox(name).await?.is_none() {
+        if ctx.gateway.get_sandbox(name, workspace).await?.is_none() {
             return create(ctx, name, sandbox, policy).await;
         }
         tokio::time::sleep(RECREATE_POLL_INTERVAL).await;
@@ -642,6 +664,7 @@ fn build_sandbox_create(
         runtime_class_name: spec.runtime_class_name.clone(),
         labels: spec.labels.clone(),
         annotations: spec.annotations.clone(),
+        workspace: workspace_of(spec).to_owned(),
     }
 }
 
@@ -689,7 +712,11 @@ async fn ensure_pvcs(
 async fn cleanup(sandbox: Arc<OpenShellSandbox>, ctx: Arc<Context>) -> Result<Action> {
     let name = sandbox.name_any();
     info!(%name, "deleting sandbox on gateway");
-    if !ctx.gateway.delete_sandbox(&name).await? {
+    if !ctx
+        .gateway
+        .delete_sandbox(&name, workspace_of(&sandbox.spec))
+        .await?
+    {
         info!(%name, "sandbox already absent on gateway");
     }
 
@@ -779,6 +806,7 @@ mod tests {
         Phase, PolicySource, REQUEUE_INTERVAL, TRANSITIONAL_REQUEUE_INTERVAL, build_sandbox_create,
         hash_drifted, hash_material, immutable_fingerprint, map_phase, mutable_policy_fingerprint,
         provider_delta, references_policy, resources_json, select_policy_source, success_requeue,
+        workspace_of,
     };
     use crate::crd::{
         FilesystemPolicy, LandlockPolicy, OpenShellPolicySpec, OpenShellSandbox,
@@ -797,6 +825,48 @@ mod tests {
             gpu: true,
             ..OpenShellSandboxSpec::default()
         }
+    }
+
+    #[test]
+    fn workspace_of_defaults_to_empty_when_unset() {
+        // Unset → empty string, which the gateway resolves to its `default`
+        // workspace — preserving the pre-workspace behaviour exactly.
+        assert_eq!(workspace_of(&OpenShellSandboxSpec::default()), "");
+        let scoped = OpenShellSandboxSpec {
+            workspace: Some("team-a".to_owned()),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert_eq!(workspace_of(&scoped), "team-a");
+    }
+
+    #[test]
+    fn build_sandbox_create_carries_workspace() {
+        let scoped = OpenShellSandboxSpec {
+            workspace: Some("team-a".to_owned()),
+            ..OpenShellSandboxSpec::default()
+        };
+        assert_eq!(
+            build_sandbox_create("named", &scoped, None).workspace,
+            "team-a"
+        );
+        // Unset stays empty (the gateway default), not the literal "default".
+        assert_eq!(
+            build_sandbox_create("named", &sample_spec(), None).workspace,
+            ""
+        );
+    }
+
+    #[test]
+    fn workspace_absent_from_fingerprint() {
+        // Workspace is immutable and identity-defining, not a recreate trigger:
+        // setting it must not perturb the immutable fingerprint, so existing
+        // sandboxes keep their recorded hash across the upgrade that adds it.
+        let base = immutable_fingerprint(&sample_spec(), None);
+        let scoped = OpenShellSandboxSpec {
+            workspace: Some("team-a".to_owned()),
+            ..sample_spec()
+        };
+        assert_eq!(immutable_fingerprint(&scoped, None), base);
     }
 
     #[test]

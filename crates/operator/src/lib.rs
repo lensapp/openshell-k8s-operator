@@ -9,10 +9,12 @@
 //!
 //! See `PLAN.md` for the architecture. Alongside the `OpenShellSandbox` loop,
 //! the operator reconciles `OpenShellProvider` (credentials resolved from a Secret,
-//! entitlement-checked, synced to the gateway with a rotation watch) and
+//! entitlement-checked, synced to the gateway with a rotation watch),
 //! `OpenShellPolicy` (a reusable policy document validated by the gateway parser and
 //! applied to a sandbox at creation via `spec.policyRef`, or inlined under
-//! `spec.policy`).
+//! `spec.policy`), and `OpenShellWorkspace` (a cluster-scoped gateway tenancy
+//! boundary with declarative membership, that sandboxes and providers join via
+//! `spec.workspace`).
 
 pub mod conditions;
 pub mod controllers;
@@ -30,7 +32,8 @@ pub mod webhook;
 pub use crd::{
     FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,
     OpenShellProvider, OpenShellProviderSpec, OpenShellProviderStatus, OpenShellSandbox,
-    OpenShellSandboxSpec, OpenShellSandboxStatus, Phase, ProcessPolicy, ResourceQuantities,
-    SandboxResources, SandboxVolume, SecretRef, VolumeRetention,
+    OpenShellSandboxSpec, OpenShellSandboxStatus, OpenShellWorkspace, OpenShellWorkspaceSpec,
+    OpenShellWorkspaceStatus, Phase, ProcessPolicy, ResourceQuantities, SandboxResources,
+    SandboxVolume, SecretRef, VolumeRetention, WorkspaceMember, WorkspacePhase, WorkspaceRole,
 };
 pub use error::{Error, Result};

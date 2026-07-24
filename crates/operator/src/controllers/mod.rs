@@ -20,6 +20,7 @@ use crate::gateway::Gateway;
 pub mod policy;
 pub mod provider;
 pub mod sandbox;
+pub mod workspace;
 
 /// Requeue interval for a successful reconcile (drift re-check cadence).
 const REQUEUE_INTERVAL: Duration = Duration::from_secs(300);
@@ -60,7 +61,8 @@ pub async fn run(kube: Client, gateway: Arc<dyn Gateway>) -> Result<()> {
     tokio::join!(
         sandbox::run(context.clone()),
         provider::run(context.clone()),
-        policy::run(context),
+        policy::run(context.clone()),
+        workspace::run(context),
     );
     Ok(())
 }

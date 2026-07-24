@@ -7,20 +7,26 @@ metadata:
 rules:
   # The custom resources this operator reconciles.
   - apiGroups: ["openshell.lenshq.io"]
-    resources: ["openshellsandboxes", "openshellproviders", "openshellpolicies"]
+    resources:
+      - "openshellsandboxes"
+      - "openshellproviders"
+      - "openshellpolicies"
+      - "openshellworkspaces"
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["openshell.lenshq.io"]
     resources:
       - "openshellsandboxes/status"
       - "openshellproviders/status"
       - "openshellpolicies/status"
+      - "openshellworkspaces/status"
     verbs: ["get", "update", "patch"]
-  # Only the sandbox and provider reconcilers use finalizers; policy owns no
-  # gateway state.
+  # The sandbox, provider, and workspace reconcilers use finalizers (each owns
+  # gateway state); policy owns none.
   - apiGroups: ["openshell.lenshq.io"]
     resources:
       - "openshellsandboxes/finalizers"
       - "openshellproviders/finalizers"
+      - "openshellworkspaces/finalizers"
     verbs: ["update"]
   # Provider credentials are read from Secrets, which are watched for rotation.
   - apiGroups: [""]

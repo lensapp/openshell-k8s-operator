@@ -15,8 +15,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use openshell_sdk::raw::AuthedGrpcClient;
 use openshell_sdk::raw::proto::{
-    self, AttachSandboxProviderRequest, CreateProviderRequest, CreateSandboxRequest,
-    DeleteProviderRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
+    self, AddWorkspaceMemberRequest, AttachSandboxProviderRequest, CreateProviderRequest,
+    CreateSandboxRequest, CreateWorkspaceRequest, DeleteProviderRequest, DeleteSandboxRequest,
+    DeleteWorkspaceRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
+    GetWorkspaceRequest, ListWorkspaceMembersRequest, RemoveWorkspaceMemberRequest,
     UpdateConfigRequest, UpdateProviderRequest,
 };
 use openshell_sdk::{
@@ -80,6 +82,9 @@ pub struct SandboxCreate {
     pub labels: BTreeMap<String, String>,
     /// Annotations applied to the sandbox's compute-platform resources.
     pub annotations: BTreeMap<String, String>,
+    /// Gateway workspace the sandbox belongs to. Empty is the gateway's
+    /// `default` workspace (its own normalization), preserving prior behaviour.
+    pub workspace: String,
 }
 
 /// Resolved provider desired state handed to the gateway. Credentials are
@@ -94,6 +99,9 @@ pub struct ProviderInput {
     pub credentials: BTreeMap<String, String>,
     /// Non-secret configuration.
     pub config: BTreeMap<String, String>,
+    /// Gateway workspace the provider belongs to. Empty is the gateway's
+    /// `default` workspace.
+    pub workspace: String,
 }
 
 /// A provider-type profile projected to what credential-strategy selection
@@ -131,6 +139,57 @@ pub struct ConfigureRefreshInput {
     pub credential_key: String,
     /// Strategy and seed material, resolved by [`crate::credentials`].
     pub plan: RefreshPlan,
+    /// Gateway workspace the provider belongs to. Empty is the gateway's
+    /// `default` workspace.
+    pub workspace: String,
+}
+
+/// Resolved workspace desired state handed to the gateway at creation.
+#[derive(Clone, Debug, Default)]
+pub struct WorkspaceCreate {
+    /// Workspace name (matches the CR name); a DNS-1123 label.
+    pub name: String,
+    /// Labels applied at creation. The gateway has no update RPC, so these are
+    /// create-time only.
+    pub labels: BTreeMap<String, String>,
+}
+
+/// Projection of a gateway workspace the reconciler consumes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceState {
+    /// Current lifecycle phase reported by the gateway.
+    pub phase: WorkspacePhase,
+}
+
+/// Lifecycle phase of a gateway workspace, projected for the reconciler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WorkspacePhase {
+    /// Workspace is active and usable.
+    Active,
+    /// Workspace is being torn down.
+    Terminating,
+    /// Any other/unspecified gateway phase.
+    Unknown,
+}
+
+/// A workspace member as the gateway reports it, projected for convergence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceMemberView {
+    /// OIDC subject claim identifying the principal.
+    pub subject: String,
+    /// Role the principal holds in the workspace.
+    pub role: WorkspaceRole,
+}
+
+/// Role a workspace member holds. Mirrors the gateway's `WorkspaceRole`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WorkspaceRole {
+    /// Regular member.
+    User,
+    /// Workspace administrator.
+    Admin,
 }
 
 /// The subset of the OpenShell gateway API the reconcilers drive.
@@ -139,17 +198,19 @@ pub trait Gateway: Send + Sync {
     /// Create a sandbox from the given desired state.
     async fn create_sandbox(&self, create: SandboxCreate) -> Result<SandboxState>;
 
-    /// Fetch a sandbox by name, or `None` if the gateway has no such sandbox.
-    async fn get_sandbox(&self, name: &str) -> Result<Option<SandboxState>>;
+    /// Fetch a sandbox by name within `workspace`, or `None` if the gateway has
+    /// no such sandbox. Empty `workspace` is the gateway's `default`.
+    async fn get_sandbox(&self, name: &str, workspace: &str) -> Result<Option<SandboxState>>;
 
-    /// Delete a sandbox by name. Returns `false` if it was already absent.
-    async fn delete_sandbox(&self, name: &str) -> Result<bool>;
+    /// Delete a sandbox by name within `workspace`. Returns `false` if it was
+    /// already absent.
+    async fn delete_sandbox(&self, name: &str, workspace: &str) -> Result<bool>;
 
-    /// Attach a provider to a live sandbox.
-    async fn attach_provider(&self, sandbox: &str, provider: &str) -> Result<()>;
+    /// Attach a provider to a live sandbox in `workspace`.
+    async fn attach_provider(&self, sandbox: &str, provider: &str, workspace: &str) -> Result<()>;
 
-    /// Detach a provider from a live sandbox.
-    async fn detach_provider(&self, sandbox: &str, provider: &str) -> Result<()>;
+    /// Detach a provider from a live sandbox in `workspace`.
+    async fn detach_provider(&self, sandbox: &str, provider: &str, workspace: &str) -> Result<()>;
 
     /// Apply a policy to a live sandbox in place (the gateway's `UpdateConfig`).
     ///
@@ -157,13 +218,19 @@ pub trait Gateway: Send + Sync {
     /// actually change; a non-additive `filesystem` edit is rejected as
     /// [`Error::PolicyUpdateRejected`]. `landlock`/`process` never reach this
     /// path — the reconciler recreates the sandbox for those.
-    async fn update_policy(&self, sandbox: &str, policy: proto::SandboxPolicy) -> Result<()>;
+    async fn update_policy(
+        &self,
+        sandbox: &str,
+        policy: proto::SandboxPolicy,
+        workspace: &str,
+    ) -> Result<()>;
 
     /// Create or update a provider so it matches `input`.
     async fn upsert_provider(&self, input: ProviderInput) -> Result<()>;
 
-    /// Delete a provider by name. Returns `false` if it was already absent.
-    async fn delete_provider(&self, name: &str) -> Result<bool>;
+    /// Delete a provider by name within `workspace`. Returns `false` if it was
+    /// already absent.
+    async fn delete_provider(&self, name: &str, workspace: &str) -> Result<bool>;
 
     /// List the provider-type profiles the gateway knows, projected to
     /// [`ProviderProfileView`]. Used to decide credential handling per type
@@ -174,6 +241,32 @@ pub trait Gateway: Send + Sync {
     /// The gateway thereafter mints short-lived tokens from the seed material
     /// rather than injecting a stored static value.
     async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()>;
+
+    /// Create a workspace from the given desired state. Idempotent: an existing
+    /// workspace of the same name is adopted (its state returned) rather than
+    /// erroring, so a CR can also take over a workspace created out of band.
+    async fn create_workspace(&self, create: WorkspaceCreate) -> Result<WorkspaceState>;
+
+    /// Fetch a workspace by name, or `None` if the gateway has no such workspace.
+    async fn get_workspace(&self, name: &str) -> Result<Option<WorkspaceState>>;
+
+    /// Delete a workspace by name. Returns `false` if it was already absent.
+    async fn delete_workspace(&self, name: &str) -> Result<bool>;
+
+    /// List a workspace's members, projected to [`WorkspaceMemberView`].
+    async fn list_workspace_members(&self, workspace: &str) -> Result<Vec<WorkspaceMemberView>>;
+
+    /// Grant a principal (by OIDC subject) a role in a workspace. The gateway's
+    /// add is create-only, so a role change is a remove followed by an add.
+    async fn add_workspace_member(
+        &self,
+        workspace: &str,
+        subject: &str,
+        role: WorkspaceRole,
+    ) -> Result<()>;
+
+    /// Remove a principal (by OIDC subject) from a workspace.
+    async fn remove_workspace_member(&self, workspace: &str, subject: &str) -> Result<()>;
 }
 
 /// Default gateway endpoint when `OPENSHELL_GATEWAY_ENDPOINT` is unset.
@@ -356,7 +449,7 @@ impl Gateway for SdkGateway {
         Ok(sandbox_state(&sandbox))
     }
 
-    async fn get_sandbox(&self, name: &str) -> Result<Option<SandboxState>> {
+    async fn get_sandbox(&self, name: &str, workspace: &str) -> Result<Option<SandboxState>> {
         // Use the raw client so the full spec (current providers) and metadata
         // (resource version) come back for convergence — the curated
         // `get_sandbox` projects those away.
@@ -364,10 +457,7 @@ impl Gateway for SdkGateway {
         match grpc
             .get_sandbox(GetSandboxRequest {
                 name: name.to_owned(),
-                // v0.0.90 added workspace scoping across the API. Empty resolves
-                // to the gateway's "default" workspace — the operator's existing
-                // behaviour; surfacing workspaces on the CRDs is a separate change.
-                workspace: String::new(),
+                workspace: workspace.to_owned(),
             })
             .await
         {
@@ -377,11 +467,21 @@ impl Gateway for SdkGateway {
         }
     }
 
-    async fn delete_sandbox(&self, name: &str) -> Result<bool> {
-        Ok(self.client.delete_sandbox(name).await?)
+    async fn delete_sandbox(&self, name: &str, workspace: &str) -> Result<bool> {
+        // Raw (not the curated `delete_sandbox`, which is fixed to the default
+        // workspace) so the delete targets the sandbox's actual workspace.
+        let response = self
+            .grpc()
+            .await?
+            .delete_sandbox(DeleteSandboxRequest {
+                name: name.to_owned(),
+                workspace: workspace.to_owned(),
+            })
+            .await?;
+        Ok(response.into_inner().deleted)
     }
 
-    async fn attach_provider(&self, sandbox: &str, provider: &str) -> Result<()> {
+    async fn attach_provider(&self, sandbox: &str, provider: &str, workspace: &str) -> Result<()> {
         self.grpc()
             .await?
             .attach_sandbox_provider(AttachSandboxProviderRequest {
@@ -392,26 +492,31 @@ impl Gateway for SdkGateway {
                 // several providers in one reconcile (each attach bumps the
                 // version), so pinning a pre-read version would self-conflict.
                 expected_resource_version: 0,
-                workspace: String::new(),
+                workspace: workspace.to_owned(),
             })
             .await?;
         Ok(())
     }
 
-    async fn detach_provider(&self, sandbox: &str, provider: &str) -> Result<()> {
+    async fn detach_provider(&self, sandbox: &str, provider: &str, workspace: &str) -> Result<()> {
         self.grpc()
             .await?
             .detach_sandbox_provider(DetachSandboxProviderRequest {
                 sandbox_name: sandbox.to_owned(),
                 provider_name: provider.to_owned(),
                 expected_resource_version: 0,
-                workspace: String::new(),
+                workspace: workspace.to_owned(),
             })
             .await?;
         Ok(())
     }
 
-    async fn update_policy(&self, sandbox: &str, policy: proto::SandboxPolicy) -> Result<()> {
+    async fn update_policy(
+        &self,
+        sandbox: &str,
+        policy: proto::SandboxPolicy,
+        workspace: &str,
+    ) -> Result<()> {
         // Spelled out rather than `..default()` so a future proto field fails the
         // build here and gets re-checked — the gateway proto is an external
         // contract. The operator only pushes a full policy; the per-setting and
@@ -429,7 +534,7 @@ impl Gateway for SdkGateway {
             // sole writer, matching attach/detach above.
             expected_resource_version: 0,
             annotations: HashMap::new(),
-            workspace: String::new(),
+            workspace: workspace.to_owned(),
         };
         match self.grpc().await?.update_config(request).await {
             Ok(_) => Ok(()),
@@ -451,7 +556,7 @@ impl Gateway for SdkGateway {
         let existing = match grpc
             .get_provider(GetProviderRequest {
                 name: input.name.clone(),
-                workspace: String::new(),
+                workspace: input.workspace.clone(),
             })
             .await
         {
@@ -476,7 +581,9 @@ impl Gateway for SdkGateway {
             // Credential expiry is not modelled in v1.
             credential_expires_at_ms: HashMap::new(),
             // Empty = the provider's type profile lives in the platform/global
-            // scope (current behaviour); must match metadata.workspace, also empty.
+            // scope. The gateway allows this for any workspace (it only rejects a
+            // profile_workspace that is non-empty and mismatched), so global
+            // profiles stay valid for a workspaced provider.
             profile_workspace: String::new(),
         };
 
@@ -484,25 +591,25 @@ impl Gateway for SdkGateway {
             grpc.update_provider(UpdateProviderRequest {
                 provider: Some(provider),
                 credential_expires_at_ms: HashMap::new(),
-                workspace: String::new(),
+                workspace: input.workspace.clone(),
             })
             .await?;
         } else {
             grpc.create_provider(CreateProviderRequest {
                 provider: Some(provider),
-                workspace: String::new(),
+                workspace: input.workspace.clone(),
             })
             .await?;
         }
         Ok(())
     }
 
-    async fn delete_provider(&self, name: &str) -> Result<bool> {
+    async fn delete_provider(&self, name: &str, workspace: &str) -> Result<bool> {
         let mut grpc = self.grpc().await?;
         let response = grpc
             .delete_provider(DeleteProviderRequest {
                 name: name.to_owned(),
-                workspace: String::new(),
+                workspace: workspace.to_owned(),
             })
             .await?;
         Ok(response.into_inner().deleted)
@@ -537,10 +644,165 @@ impl Gateway for SdkGateway {
             secret_material_keys: input.plan.secret_material_keys,
             // The credential's own expiry is managed by the refresh loop.
             expires_at_ms: None,
-            workspace: String::new(),
+            workspace: input.workspace,
         })
         .await?;
         Ok(())
+    }
+
+    async fn create_workspace(&self, create: WorkspaceCreate) -> Result<WorkspaceState> {
+        let mut grpc = self.grpc().await?;
+        match grpc
+            .create_workspace(CreateWorkspaceRequest {
+                name: create.name.clone(),
+                labels: create.labels.into_iter().collect(),
+            })
+            .await
+        {
+            Ok(response) => workspace_state(response.into_inner().workspace),
+            // Adopt a workspace that already exists (a create race, or one made
+            // out of band): re-read it and return its state rather than erroring.
+            Err(status) if status.code() == Code::AlreadyExists => self
+                .get_workspace(&create.name)
+                .await?
+                .ok_or_else(|| missing_workspace(&create.name)),
+            Err(status) => Err(status.into()),
+        }
+    }
+
+    async fn get_workspace(&self, name: &str) -> Result<Option<WorkspaceState>> {
+        let mut grpc = self.grpc().await?;
+        match grpc
+            .get_workspace(GetWorkspaceRequest {
+                name: name.to_owned(),
+            })
+            .await
+        {
+            Ok(response) => response
+                .into_inner()
+                .workspace
+                .map(|workspace| workspace_state(Some(workspace)))
+                .transpose(),
+            Err(status) if status.code() == Code::NotFound => Ok(None),
+            Err(status) => Err(status.into()),
+        }
+    }
+
+    async fn delete_workspace(&self, name: &str) -> Result<bool> {
+        let mut grpc = self.grpc().await?;
+        match grpc
+            .delete_workspace(DeleteWorkspaceRequest {
+                name: name.to_owned(),
+            })
+            .await
+        {
+            Ok(response) => Ok(response.into_inner().deleted),
+            Err(status) if status.code() == Code::NotFound => Ok(false),
+            Err(status) => Err(status.into()),
+        }
+    }
+
+    async fn list_workspace_members(&self, workspace: &str) -> Result<Vec<WorkspaceMemberView>> {
+        let mut grpc = self.grpc().await?;
+        let mut members = Vec::new();
+        let mut offset = 0_u32;
+        // Page until the gateway returns nothing more, advancing by however many
+        // it actually returned. The gateway caps a single page, so a workspace
+        // with many members needs more than one request; not assuming it honours
+        // `limit` exactly means a server-side clamp can't make us miss members.
+        loop {
+            let response = grpc
+                .list_workspace_members(ListWorkspaceMembersRequest {
+                    workspace: workspace.to_owned(),
+                    limit: MEMBER_PAGE,
+                    offset,
+                })
+                .await?
+                .into_inner();
+            let page = response.members.len();
+            members.extend(response.members.into_iter().map(member_view));
+            if page == 0 {
+                break;
+            }
+            offset = offset.saturating_add(page.try_into().unwrap_or(u32::MAX));
+        }
+        Ok(members)
+    }
+
+    async fn add_workspace_member(
+        &self,
+        workspace: &str,
+        subject: &str,
+        role: WorkspaceRole,
+    ) -> Result<()> {
+        self.grpc()
+            .await?
+            .add_workspace_member(AddWorkspaceMemberRequest {
+                workspace: workspace.to_owned(),
+                principal_subject: subject.to_owned(),
+                role: workspace_role_to_proto(role) as i32,
+            })
+            .await?;
+        Ok(())
+    }
+
+    async fn remove_workspace_member(&self, workspace: &str, subject: &str) -> Result<()> {
+        self.grpc()
+            .await?
+            .remove_workspace_member(RemoveWorkspaceMemberRequest {
+                workspace: workspace.to_owned(),
+                principal_subject: subject.to_owned(),
+            })
+            .await?;
+        Ok(())
+    }
+}
+
+/// Members requested per `list_workspace_members` page. The gateway caps a page
+/// server-side; this keeps round-trips low without assuming that cap.
+const MEMBER_PAGE: u32 = 100;
+
+/// Error for a workspace that vanished between a create-race and its re-read.
+fn missing_workspace(name: &str) -> Error {
+    Error::Gateway(SdkError::invalid_config(format!(
+        "workspace {name} missing from gateway response"
+    )))
+}
+
+/// Project a gateway `Workspace` onto [`WorkspaceState`], erroring if the
+/// response carried no workspace.
+fn workspace_state(workspace: Option<proto::datamodel::v1::Workspace>) -> Result<WorkspaceState> {
+    let workspace = workspace.ok_or_else(|| {
+        Error::Gateway(SdkError::invalid_config(
+            "workspace missing from gateway response",
+        ))
+    })?;
+    let phase = match workspace.status.map(|status| status.phase()) {
+        Some(proto::datamodel::v1::WorkspacePhase::Active) => WorkspacePhase::Active,
+        Some(proto::datamodel::v1::WorkspacePhase::Terminating) => WorkspacePhase::Terminating,
+        _ => WorkspacePhase::Unknown,
+    };
+    Ok(WorkspaceState { phase })
+}
+
+/// Project a raw proto `WorkspaceMember` onto [`WorkspaceMemberView`]. An
+/// unspecified/unknown role reads as `User` (the least-privileged mapping).
+fn member_view(member: proto::WorkspaceMember) -> WorkspaceMemberView {
+    let role = match member.role() {
+        proto::WorkspaceRole::Admin => WorkspaceRole::Admin,
+        _ => WorkspaceRole::User,
+    };
+    WorkspaceMemberView {
+        subject: member.principal_subject,
+        role,
+    }
+}
+
+/// Map a [`WorkspaceRole`] onto its proto discriminant.
+fn workspace_role_to_proto(role: WorkspaceRole) -> proto::WorkspaceRole {
+    match role {
+        WorkspaceRole::User => proto::WorkspaceRole::User,
+        WorkspaceRole::Admin => proto::WorkspaceRole::Admin,
     }
 }
 
@@ -647,6 +909,7 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
         runtime_class_name,
         labels,
         annotations,
+        workspace,
     } = create;
 
     // A template is needed once any template-level field is set. An empty image
@@ -684,7 +947,7 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
         name,
         labels: HashMap::new(),
         annotations: HashMap::new(),
-        workspace: String::new(),
+        workspace,
     }
 }
 
