@@ -17,6 +17,6 @@ dependencies:
   # under `openshellGateway:`, separate from our own `gateway:` knobs.
   - name: helm-chart
     alias: openshellGateway
-    version: "0.0.86"
+    version: "0.0.90"
     repository: oci://ghcr.io/nvidia/openshell
     condition: gateway.bundled
