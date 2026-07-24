@@ -98,6 +98,40 @@ auth:
         cpu: 100m
         memory: 64Mi
 
+# Admission webhook that confines interactive access to sandbox pods.
+#
+# A sandbox's agent container runs privileged, so a plain `kubectl exec` lands
+# as root, outside the per-process confinement the supervisor applies to the
+# workload. When enabled, a mutating webhook rewrites exec into sandbox pods to
+# re-enter the sandbox (dropping to the sandbox user under Landlock), and a
+# validating webhook denies attach / `kubectl debug`, which would bypass it.
+#
+# Opt-in and off by default: it is a cluster admission webhook, and with the
+# default fail-closed policy an operator outage blocks exec/attach — but only in
+# namespaces you explicitly label (see namespaceLabel). Pod creation and every
+# other namespace are never affected. The operator must run as its own
+# Deployment (operator.deployStandalone=true) to serve it.
+webhook:
+  execConfinement:
+    enabled: false
+    # Only namespaces carrying `<namespaceLabel>: "enabled"` are subject to the
+    # webhook. This bounds the fail-closed blast radius to namespaces you opt in.
+    namespaceLabel: openshell.lenshq.io/exec-confinement
+    # failurePolicy for both webhooks. Fail (fail-closed) is the secure default:
+    # if the operator is unreachable, exec/attach into labelled namespaces is
+    # denied rather than falling back to an unconfined root shell. Set to Ignore
+    # to fail open (reopens root exec whenever the webhook is down).
+    failurePolicy: Fail
+    # HTTPS port the operator serves the webhook on (Service fronts it on 443).
+    port: 9443
+    # Argv prepended to a sandbox exec to re-enter confinement. Matches the
+    # supervisor entrypoint baked into the sandbox image; override only if that
+    # upstream image path changes.
+    wrapper:
+      - /opt/openshell/bin/openshell-sandbox
+      - --mode=process
+      - --
+
 # Log filter passed to the operator via RUST_LOG (tracing EnvFilter syntax).
 logLevel: info
 

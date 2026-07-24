@@ -25,6 +25,7 @@ pub mod leader;
 pub mod policy;
 pub mod secret;
 pub mod volumes;
+pub mod webhook;
 
 pub use crd::{
     FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,

@@ -35,3 +35,20 @@ rules:
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch"]
+  {{- if .Values.webhook.execConfinement.enabled }}
+  # The exec-confinement webhook GETs the pod being exec'd/attached to classify
+  # it as a sandbox (by its agents.x-k8s.io/Sandbox ownerReference).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  # ...and injects its self-signed caBundle into its own two webhook configs.
+  # Scoped by resourceNames to exactly those objects.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations"]
+    verbs: ["get", "patch"]
+    resourceNames: ["{{ include "openshell-operator.webhookMutatingName" . }}"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations"]
+    verbs: ["get", "patch"]
+    resourceNames: ["{{ include "openshell-operator.webhookValidatingName" . }}"]
+  {{- end }}

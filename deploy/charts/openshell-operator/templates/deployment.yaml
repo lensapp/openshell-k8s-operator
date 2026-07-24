@@ -40,6 +40,11 @@ spec:
             - name: health
               containerPort: 8080
               protocol: TCP
+            {{- if .Values.webhook.execConfinement.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.execConfinement.port }}
+              protocol: TCP
+            {{- end }}
           # Liveness: the process is up and its runtime is servicing HTTP.
           # Readiness: startup finished (gateway client built). A leader-election
           # standby reads ready too — it can take over — so a rollout can retire
@@ -85,6 +90,26 @@ spec:
             {{- if .Values.gateway.insecureSkipVerify }}
             - name: OPENSHELL_INSECURE_SKIP_VERIFY
               value: "true"
+            {{- end }}
+            {{- if .Values.webhook.execConfinement.enabled }}
+            # Admission webhook: the operator serves it, self-issues the cert
+            # into the Secret, and injects the caBundle into the two configs.
+            - name: OPENSHELL_WEBHOOK_ENABLED
+              value: "true"
+            - name: OPENSHELL_WEBHOOK_LISTEN
+              value: "0.0.0.0:{{ .Values.webhook.execConfinement.port }}"
+            - name: OPENSHELL_WEBHOOK_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: OPENSHELL_WEBHOOK_SERVICE
+              value: {{ include "openshell-operator.webhookServiceName" . | quote }}
+            - name: OPENSHELL_WEBHOOK_SECRET
+              value: {{ include "openshell-operator.webhookSecretName" . | quote }}
+            - name: OPENSHELL_WEBHOOK_MUTATING_CONFIG
+              value: {{ include "openshell-operator.webhookMutatingName" . | quote }}
+            - name: OPENSHELL_WEBHOOK_VALIDATING_CONFIG
+              value: {{ include "openshell-operator.webhookValidatingName" . | quote }}
+            - name: OPENSHELL_WEBHOOK_WRAPPER
+              value: {{ .Values.webhook.execConfinement.wrapper | toJson | quote }}
             {{- end }}
             - name: RUST_LOG
               value: {{ .Values.logLevel | quote }}
