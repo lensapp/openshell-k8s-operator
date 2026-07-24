@@ -321,6 +321,9 @@ spec:
                 nullable: true
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: spec.workspace is immutable
+              rule: has(self.workspace) == has(oldSelf.workspace) && (!has(self.workspace) || self.workspace == oldSelf.workspace)
           status:
             description: Observed state mirrored from the gateway.
             nullable: true
@@ -455,7 +458,7 @@ spec:
                 - name
                 type: object
               type:
-                description: Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable — enforced by the validating webhook (milestone 4).
+                description: Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable — enforced at admission by a CEL rule on this spec.
                 type: string
               workspace:
                 description: 'Gateway workspace this provider belongs to — the name of an `OpenShellWorkspace` (cluster-scoped). Empty/omitted uses the gateway''s `default` workspace. **Immutable**: a provider''s gateway identity is `(workspace, name)`, so changing the workspace would target a different object; delete and recreate the resource to move it.'
@@ -465,6 +468,11 @@ spec:
             - credentialsSecretRef
             - type
             type: object
+            x-kubernetes-validations:
+            - message: spec.type is immutable
+              rule: self.type == oldSelf.type
+            - message: spec.workspace is immutable
+              rule: has(self.workspace) == has(oldSelf.workspace) && (!has(self.workspace) || self.workspace == oldSelf.workspace)
           status:
             description: Observed state mirrored from the gateway for an `OpenShellProvider`.
             nullable: true
