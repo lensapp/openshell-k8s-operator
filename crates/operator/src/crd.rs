@@ -8,7 +8,7 @@
 //! controller, keeping this module free of the gateway dependency.
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::CustomResource;
+use kube::{CELSchema, CustomResource};
 
 use crate::credentials::CredentialMode;
 use schemars::JsonSchema;
@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 /// inline via `policy` or by reference via `policyRef` (naming an
 /// `OpenShellPolicy` in the same namespace) — at most one of the two. Gateway
 /// selection, entrypoint, and TTL/cleanup arrive in later milestones.
-#[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(CustomResource, CELSchema, Clone, Debug, Default, Deserialize, Serialize)]
 #[kube(
     group = "openshell.lenshq.io",
     version = "v1alpha1",
@@ -35,6 +35,16 @@ use std::collections::BTreeMap;
     printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
     printcolumn = r#"{"name":"Sandbox","type":"string","jsonPath":".status.sandboxId"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+// spec.workspace is part of the sandbox's gateway identity (objects are named
+// `{workspace}--{name}`), so a change would orphan the old sandbox rather than
+// move it. Enforce full immutability — including add/remove — at admission.
+// The has() guards are required, not defensive: a bare `self.workspace ==
+// oldSelf.workspace` errors (and so fails admission) on every update where the
+// optional field is unset. The `self.?workspace` optional-types spelling would
+// be simpler but needs k8s >= 1.29, so keep the has() form for compatibility.
+#[cel_validate(
+    rule = ("has(self.workspace) == has(oldSelf.workspace) && (!has(self.workspace) || self.workspace == oldSelf.workspace)", "spec.workspace is immutable").into()
 )]
 #[serde(rename_all = "camelCase")]
 pub struct OpenShellSandboxSpec {
@@ -252,7 +262,7 @@ pub enum Phase {
 /// Credential values are never stored on this resource — they live in a Secret
 /// referenced by [`OpenShellProviderSpec::credentials_secret_ref`] and are resolved at
 /// reconcile time.
-#[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[derive(CustomResource, CELSchema, Clone, Debug, Default, Deserialize, Serialize)]
 #[kube(
     group = "openshell.lenshq.io",
     version = "v1alpha1",
@@ -265,10 +275,17 @@ pub enum Phase {
     printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
     printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
 )]
+// A provider's gateway identity is (type, workspace, name); changing type or
+// workspace would target a different object, so both are immutable at admission.
+// (The workspace rule's has() guards are load-bearing — see the sandbox spec.)
+#[cel_validate(rule = ("self.type == oldSelf.type", "spec.type is immutable").into())]
+#[cel_validate(
+    rule = ("has(self.workspace) == has(oldSelf.workspace) && (!has(self.workspace) || self.workspace == oldSelf.workspace)", "spec.workspace is immutable").into()
+)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenShellProviderSpec {
     /// Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable —
-    /// enforced by the validating webhook (milestone 4).
+    /// enforced at admission by a CEL rule on this spec.
     #[serde(rename = "type")]
     pub provider_type: String,
 
