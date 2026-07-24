@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.2.0...v0.3.0) (2026-07-24)
+
+
+### Features
+
+* add OpenShellWorkspace CRD and workspace scoping ([da6f26d](https://github.com/lensapp/openshell-k8s-operator/commit/da6f26d3aaa57ba6dea50c8920bf6c4666bc521d))
+* confine kubectl exec into sandboxes via admission webhook ([4117804](https://github.com/lensapp/openshell-k8s-operator/commit/4117804dc012d28cadb15352241ba31a1f6c547b))
+* default exec confinement to gateway.bundled ([fc42812](https://github.com/lensapp/openshell-k8s-operator/commit/fc4281298f78c3b6ffca0d00e41bbdff8d8272f9))
+* refresh gateway bearer from the mounted token file ([e9c554d](https://github.com/lensapp/openshell-k8s-operator/commit/e9c554d935e101c8886ffd37074c82ea94fc6796))
+
+
+### Bug Fixes
+
+* scope bundled exec webhook to the gateway's sandbox namespace ([98e5532](https://github.com/lensapp/openshell-k8s-operator/commit/98e5532fa177d17c69048bded6b9af89bf48d459))
+
 ## [0.2.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.1.0...v0.2.0) (2026-07-21)
 
 
