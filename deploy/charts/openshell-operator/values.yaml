@@ -110,11 +110,12 @@ webhook:
   execConfinement:
     # Whether to confine sandbox exec. Left unset (null), it follows
     # gateway.bundled: ON for the bundled batteries-included install — the
-    # operator knows sandboxes land in the release namespace (the gateway's
-    # sandbox_namespace) and scopes the webhook to exactly it, no labelling
-    # needed — and OFF for a bring-your-own gateway, whose sandbox placement is
-    # outside our control (opt in explicitly and label the namespaces). Set
-    # true/false to override the gateway.bundled-derived default.
+    # operator knows where sandboxes land (the gateway's sandbox namespace,
+    # openshellGateway.server.sandboxNamespace, defaulting to the release
+    # namespace) and scopes the webhook to exactly it, no labelling needed — and
+    # OFF for a bring-your-own gateway, whose sandbox placement is outside our
+    # control (opt in explicitly and label the namespaces). Set true/false to
+    # override the gateway.bundled-derived default.
     enabled: null
     # Bring-your-own only: namespaces carrying `<namespaceLabel>: "enabled"` are
     # confined, which bounds the fail-closed blast radius to namespaces you opt
