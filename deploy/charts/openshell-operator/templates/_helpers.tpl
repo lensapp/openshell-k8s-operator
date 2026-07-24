@@ -160,7 +160,7 @@ admin opted in by label, and never control-plane namespaces.
 {{- if .Values.gateway.bundled -}}
 - key: kubernetes.io/metadata.name
   operator: In
-  values: ["{{ .Release.Namespace }}"]
+  values: ["{{ dig "server" "sandboxNamespace" "" (.Values.openshellGateway | default dict) | default .Release.Namespace }}"]
 {{- else -}}
 - key: {{ .Values.webhook.execConfinement.namespaceLabel }}
   operator: In

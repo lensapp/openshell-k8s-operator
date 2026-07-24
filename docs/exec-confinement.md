@@ -15,9 +15,8 @@ confinement. Gateway RBAC governs exec *through the gateway API* (see
 [operator-auth.md](operator-auth.md)); it does not govern a direct `kubectl
 exec` against the pod, which is a pure Kubernetes operation.
 
-It is controlled by `webhook.execConfinement.enabled`, which defaults to
-`gateway.bundled`: on for the batteries-included bundled install, opt-in for a
-bring-your-own gateway (see [Enabling it](#enabling-it)).
+Whether this is on by default depends on the install mode — see
+[Enabling it](#enabling-it).
 
 ## The mechanism
 
@@ -80,10 +79,14 @@ induce webhook downtime.
 
 The blast radius is bounded by a `namespaceSelector`, scoped by install mode:
 
-- **Bundled** (`gateway.bundled=true`): the bundled gateway places sandboxes in
-  the release namespace (its `sandbox_namespace`), so the selector targets
-  exactly that namespace via the built-in `kubernetes.io/metadata.name` label —
-  no labelling step, and the fail-closed radius is the operator's own namespace.
+- **Bundled** (`gateway.bundled=true`): the selector targets the gateway's
+  sandbox namespace — `openshellGateway.server.sandboxNamespace`, defaulting to
+  the release namespace — via the built-in `kubernetes.io/metadata.name` label,
+  so there's no labelling step and the fail-closed radius is that one namespace.
+  Note the confined namespace is also where the operator and gateway run, so a
+  webhook outage blocks `kubectl exec` into *those* pods too (the ones you'd
+  reach for to debug it) — `kubectl logs` still works, and deleting the webhook
+  config is the escape hatch.
 - **BYO** (`gateway.bundled=false`): sandbox placement is outside our control, so
   the selector matches namespaces the admin opts in with
   `openshell.lenshq.io/exec-confinement: enabled` (and never `kube-system` /
