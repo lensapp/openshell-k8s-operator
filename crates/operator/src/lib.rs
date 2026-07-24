@@ -12,9 +12,11 @@
 //! entitlement-checked, synced to the gateway with a rotation watch),
 //! `OpenShellPolicy` (a reusable policy document validated by the gateway parser and
 //! applied to a sandbox at creation via `spec.policyRef`, or inlined under
-//! `spec.policy`), and `OpenShellWorkspace` (a cluster-scoped gateway tenancy
+//! `spec.policy`), `OpenShellWorkspace` (a cluster-scoped gateway tenancy
 //! boundary with declarative membership, that sandboxes and providers join via
-//! `spec.workspace`).
+//! `spec.workspace`), and `OpenShellProviderProfile` (a cluster-scoped,
+//! platform-scoped provider *type* definition that `OpenShellProvider` selects
+//! via `spec.type`).
 
 pub mod conditions;
 pub mod controllers;
@@ -25,15 +27,18 @@ pub mod gateway;
 pub mod health;
 pub mod leader;
 pub mod policy;
+pub mod profile;
 pub mod secret;
 pub mod volumes;
 pub mod webhook;
 
 pub use crd::{
     FilesystemPolicy, LandlockPolicy, OpenShellPolicy, OpenShellPolicySpec, OpenShellPolicyStatus,
-    OpenShellProvider, OpenShellProviderSpec, OpenShellProviderStatus, OpenShellSandbox,
-    OpenShellSandboxSpec, OpenShellSandboxStatus, OpenShellWorkspace, OpenShellWorkspaceSpec,
-    OpenShellWorkspaceStatus, Phase, ProcessPolicy, ResourceQuantities, SandboxResources,
-    SandboxVolume, SecretRef, VolumeRetention, WorkspaceMember, WorkspacePhase, WorkspaceRole,
+    OpenShellProvider, OpenShellProviderProfile, OpenShellProviderProfileSpec,
+    OpenShellProviderProfileStatus, OpenShellProviderSpec, OpenShellProviderStatus,
+    OpenShellSandbox, OpenShellSandboxSpec, OpenShellSandboxStatus, OpenShellWorkspace,
+    OpenShellWorkspaceSpec, OpenShellWorkspaceStatus, Phase, ProcessPolicy, ResourceQuantities,
+    SandboxResources, SandboxVolume, SecretRef, VolumeRetention, WorkspaceMember, WorkspacePhase,
+    WorkspaceRole,
 };
 pub use error::{Error, Result};

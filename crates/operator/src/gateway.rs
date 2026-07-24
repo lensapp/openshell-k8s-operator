@@ -242,6 +242,17 @@ pub trait Gateway: Send + Sync {
     /// rather than injecting a stored static value.
     async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()>;
 
+    /// Import or update a platform-scoped provider-type profile so the gateway
+    /// matches `profile`. Imports when no managed custom profile of that id
+    /// exists yet; otherwise updates it with optimistic concurrency on the
+    /// gateway's current stored resource version. Returns the stored resource
+    /// version after the write.
+    async fn upsert_provider_profile(&self, profile: proto::ProviderProfile) -> Result<u64>;
+
+    /// Delete a platform-scoped provider profile by id. Returns `false` if it
+    /// was already absent.
+    async fn delete_provider_profile(&self, id: &str) -> Result<bool>;
+
     /// Create a workspace from the given desired state. Idempotent: an existing
     /// workspace of the same name is adopted (its state returned) rather than
     /// erroring, so a CR can also take over a workspace created out of band.
@@ -650,6 +661,88 @@ impl Gateway for SdkGateway {
         Ok(())
     }
 
+    async fn upsert_provider_profile(&self, mut profile: proto::ProviderProfile) -> Result<u64> {
+        let mut grpc = self.grpc().await?;
+        let id = profile.id.clone();
+
+        // Fetch any existing profile to decide import-vs-update. A stored custom
+        // profile reports a non-zero resource_version; a built-in (or absent)
+        // one reports zero, so only a non-zero version counts as "already
+        // managed" and eligible for update. Empty workspace = platform scope.
+        let existing_version = match grpc
+            .get_provider_profile(proto::GetProviderProfileRequest {
+                id: id.clone(),
+                workspace: String::new(),
+            })
+            .await
+        {
+            Ok(response) => response
+                .into_inner()
+                .profile
+                .map(|existing| existing.resource_version)
+                .filter(|version| *version > 0),
+            Err(status) if status.code() == Code::NotFound => None,
+            Err(status) => return Err(status.into()),
+        };
+
+        if let Some(version) = existing_version {
+            // Carry the current version into the payload too; the request's
+            // explicit `expected_resource_version` is authoritative, but the
+            // gateway falls back to the embedded one, so keep them consistent.
+            profile.resource_version = version;
+            let response = grpc
+                .update_provider_profiles(proto::UpdateProviderProfilesRequest {
+                    profile: Some(import_item(profile)),
+                    expected_resource_version: version,
+                    id,
+                    workspace: String::new(),
+                })
+                .await?
+                .into_inner();
+            if !response.updated {
+                return Err(Error::ProfileRejected(render_diagnostics(
+                    &response.diagnostics,
+                )));
+            }
+            Ok(response
+                .profile
+                .map_or(version, |updated| updated.resource_version))
+        } else {
+            let response = grpc
+                .import_provider_profiles(proto::ImportProviderProfilesRequest {
+                    profiles: vec![import_item(profile)],
+                    workspace: String::new(),
+                })
+                .await?
+                .into_inner();
+            if !response.imported {
+                return Err(Error::ProfileRejected(render_diagnostics(
+                    &response.diagnostics,
+                )));
+            }
+            Ok(response
+                .profiles
+                .into_iter()
+                .find(|imported| imported.id == id)
+                .map_or(0, |imported| imported.resource_version))
+        }
+    }
+
+    async fn delete_provider_profile(&self, id: &str) -> Result<bool> {
+        let mut grpc = self.grpc().await?;
+        match grpc
+            .delete_provider_profile(proto::DeleteProviderProfileRequest {
+                id: id.to_owned(),
+                workspace: String::new(),
+            })
+            .await
+        {
+            Ok(response) => Ok(response.into_inner().deleted),
+            Err(status) if status.code() == Code::NotFound => Ok(false),
+            Err(status) => Err(status.into()),
+        }
+    }
+
     async fn create_workspace(&self, create: WorkspaceCreate) -> Result<WorkspaceState> {
         let mut grpc = self.grpc().await?;
         match grpc
@@ -804,6 +897,31 @@ fn workspace_role_to_proto(role: WorkspaceRole) -> proto::WorkspaceRole {
         WorkspaceRole::User => proto::WorkspaceRole::User,
         WorkspaceRole::Admin => proto::WorkspaceRole::Admin,
     }
+}
+
+/// The `source` label attached to profile import/update items. The gateway
+/// echoes it in any diagnostics, so it identifies the operator as the writer.
+const PROFILE_SOURCE: &str = "openshell-operator";
+
+/// Wrap a profile in the import/update envelope the gateway's profile RPCs take.
+fn import_item(profile: proto::ProviderProfile) -> proto::ProviderProfileImportItem {
+    proto::ProviderProfileImportItem {
+        profile: Some(profile),
+        source: PROFILE_SOURCE.to_owned(),
+    }
+}
+
+/// Join gateway profile diagnostics into one human-readable message for a
+/// `Ready=False` condition, in the gateway's own `field: message` shape.
+fn render_diagnostics(diagnostics: &[proto::ProviderProfileDiagnostic]) -> String {
+    if diagnostics.is_empty() {
+        return "gateway rejected the profile without diagnostics".to_owned();
+    }
+    diagnostics
+        .iter()
+        .map(|diagnostic| format!("{}: {}", diagnostic.field, diagnostic.message))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Project a raw proto `ProviderProfile` onto [`ProviderProfileView`].

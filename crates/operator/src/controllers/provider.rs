@@ -416,6 +416,15 @@ mod tests {
             self.configured.lock().unwrap().push(input);
             Ok(())
         }
+        async fn upsert_provider_profile(
+            &self,
+            _profile: openshell_sdk::raw::proto::ProviderProfile,
+        ) -> Result<u64> {
+            unreachable!("provider controller does not write provider profiles")
+        }
+        async fn delete_provider_profile(&self, _id: &str) -> Result<bool> {
+            unreachable!("provider controller does not write provider profiles")
+        }
         async fn create_workspace(&self, _create: WorkspaceCreate) -> Result<WorkspaceState> {
             unreachable!("provider controller does not touch workspaces")
         }

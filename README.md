@@ -2,7 +2,7 @@
 
 Declarative, Kubernetes-native control over [OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes — manage them with `kubectl apply` instead of talking to the gateway directly.
 
-> **Status:** early development. Four resources are implemented: `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes, in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from a Secret, synced as a static copy or gateway-minted refresh), `OpenShellPolicy` (a reusable policy applied at sandbox creation), and `OpenShellWorkspace` (a cluster-scoped tenancy boundary with declarative membership).
+> **Status:** early development. Five resources are implemented: `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes, in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from a Secret, synced as a static copy or gateway-minted refresh), `OpenShellPolicy` (a reusable policy applied at sandbox creation), `OpenShellWorkspace` (a cluster-scoped tenancy boundary with declarative membership), and `OpenShellProviderProfile` (a cluster-scoped, platform-scoped provider *type* definition).
 
 ## What it does
 
@@ -228,6 +228,32 @@ Namespaced `OpenShellSandbox` and `OpenShellProvider` join a workspace with `spe
 Membership is authoritative when `spec.members` is present (even empty): the operator converges the gateway's members to exactly the listed set — adding, removing, and re-granting on a role change. Omit `spec.members` entirely to leave membership to out-of-band tooling; the operator then manages only the workspace's lifecycle. `spec.labels` are applied at creation only — the gateway has no workspace-update RPC, so later label edits do not converge.
 
 Deletion is guarded by a finalizer. Because the gateway marks a workspace terminating *before* it checks for blockers — with no undelete — deleting one that still holds resources would permanently wedge it. So the operator refuses to delete a workspace while any `OpenShellSandbox` or `OpenShellProvider` still references it (surfacing `WorkspaceNotEmpty` on the `Ready` condition until it is emptied), and it never deletes the built-in `default`.
+
+### Provider profiles
+
+A provider *profile* is a provider **type** definition — the schema and template an `OpenShellProvider` is an instance of. The gateway ships built-in profiles for the well-known types (`claude`, `gitlab`, …); `OpenShellProviderProfile` lets a platform admin register a custom one declaratively. It is **cluster-scoped** and imported at the gateway's **platform** scope, so it is shared across every workspace — `metadata.name` *is* the profile id (lowercase kebab-case). Workspace-scoped profiles are deferred to a later revision.
+
+```yaml
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellProviderProfile
+metadata:
+  name: acme-inference
+spec:
+  displayName: Acme Inference
+  category: inference
+  inferenceCapable: true
+  credentials:                 # gateway's native snake_case schema
+    - name: api_key
+      env_vars: ["ACME_API_KEY"]
+      required: true
+  endpoints:
+    - host: api.acme.example
+      port: 443
+```
+
+Like `OpenShellPolicy`, only the stable spine (`displayName`, `description`, `category`, `inferenceCapable`) is typed; the large, fast-moving arrays (`credentials`, `endpoints`, `binaries`, `discovery`) pass through opaquely in the gateway's own `snake_case` schema, and the gateway's `openshell-providers` parser validates them at reconcile time rather than the operator mirroring them here. The reconciler reports the result on the `Ready` condition (with the parser's diagnostic in the message), so a bad profile surfaces before any provider uses it. It imports the profile on the gateway and updates it in place on change (optimistic-concurrency on the gateway's stored resource version, mirrored to `.status.resourceVersion`).
+
+Deletion is guarded by a finalizer: the operator refuses to delete a profile while any `OpenShellProvider` still selects that `type` (surfacing `ProfileInUse` on the `Ready` condition until they are gone), since removing it would break their credential handling.
 
 ### Persistent volumes
 

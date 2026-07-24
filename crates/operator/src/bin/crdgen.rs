@@ -8,7 +8,8 @@
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::CustomResourceExt;
 use openshell_operator::crd::{
-    OpenShellPolicy, OpenShellProvider, OpenShellSandbox, OpenShellWorkspace,
+    OpenShellPolicy, OpenShellProvider, OpenShellProviderProfile, OpenShellSandbox,
+    OpenShellWorkspace,
 };
 
 /// The Helm chart renders these CRDs as ordinary release resources (so
@@ -33,6 +34,8 @@ fn main() {
             .expect("serialize OpenShellPolicy CRD"),
         serde_yaml::to_string(&keep(OpenShellWorkspace::crd()))
             .expect("serialize OpenShellWorkspace CRD"),
+        serde_yaml::to_string(&keep(OpenShellProviderProfile::crd()))
+            .expect("serialize OpenShellProviderProfile CRD"),
     ] {
         println!("---");
         print!("{crd}");

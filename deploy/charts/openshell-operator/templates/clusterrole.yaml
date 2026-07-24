@@ -12,6 +12,7 @@ rules:
       - "openshellproviders"
       - "openshellpolicies"
       - "openshellworkspaces"
+      - "openshellproviderprofiles"
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["openshell.lenshq.io"]
     resources:
@@ -19,14 +20,16 @@ rules:
       - "openshellproviders/status"
       - "openshellpolicies/status"
       - "openshellworkspaces/status"
+      - "openshellproviderprofiles/status"
     verbs: ["get", "update", "patch"]
-  # The sandbox, provider, and workspace reconcilers use finalizers (each owns
-  # gateway state); policy owns none.
+  # The sandbox, provider, workspace, and provider-profile reconcilers use
+  # finalizers (each owns gateway state); policy owns none.
   - apiGroups: ["openshell.lenshq.io"]
     resources:
       - "openshellsandboxes/finalizers"
       - "openshellproviders/finalizers"
       - "openshellworkspaces/finalizers"
+      - "openshellproviderprofiles/finalizers"
     verbs: ["update"]
   # Provider credentials are read from Secrets, which are watched for rotation.
   - apiGroups: [""]
