@@ -30,12 +30,21 @@ k8s-openapi = { version = "0.24.0", features = ["latest", "schemars"] }
 schemars = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Base64 for the admission response patch payload and the injected caBundle.
+base64 = "0.22"
 serde_yaml = "0.9"
 # `Time` for status condition timestamps (metav1.Condition.lastTransitionTime).
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 # Serves the liveness/readiness probe endpoints.
 axum = "0.8"
+# TLS serving for the admission webhook. `no-provider` keeps us on the `ring`
+# crypto provider already pulled in by the kube/rustls stack, rather than
+# dragging in a second one (aws-lc-rs) via rustls' default features.
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Self-signed CA + serving cert for the webhook, generated at startup.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 futures = "0.3"
 async-trait = "0.1"
 tonic = "0.14"

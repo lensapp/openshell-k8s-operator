@@ -1,0 +1,101 @@
+{{- if .Values.webhook.execConfinement.enabled -}}
+{{- $ec := .Values.webhook.execConfinement -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openshell-operator.webhookServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "openshell-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 443
+      targetPort: {{ $ec.port }}
+      protocol: TCP
+---
+# caBundle is deliberately omitted from both configs below: the operator issues
+# a self-signed serving cert on startup and patches the caBundle in (a strategic
+# merge keyed on the webhook `name`). Helm's three-way merge leaves a field it
+# never renders untouched, so `helm upgrade` preserves the injected value. Under
+# Argo/Flux, add caBundle to ignoreDifferences to stop it flapping as drift.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "openshell-operator.webhookMutatingName" . }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+webhooks:
+  # Must match MUTATING_WEBHOOK_NAME in src/webhook.rs (caBundle injection key).
+  - name: exec.openshell.lenshq.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ $ec.failurePolicy }}
+    matchPolicy: Equivalent
+    # Idempotent rewrite (the handler skips an already-wrapped command), but keep
+    # reinvocation off so another webhook can't trigger a second wrap regardless.
+    reinvocationPolicy: Never
+    timeoutSeconds: 5
+    namespaceSelector:
+      matchExpressions:
+        # Fire only in namespaces the operator's admins opted in.
+        - key: {{ $ec.namespaceLabel }}
+          operator: In
+          values: ["enabled"]
+        # Never touch control-plane namespaces, even if mislabelled.
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system", "kube-node-lease"]
+    clientConfig:
+      service:
+        name: {{ include "openshell-operator.webhookServiceName" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate/exec
+        port: 443
+    rules:
+      - operations: ["CONNECT"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/exec"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "openshell-operator.webhookValidatingName" . }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+webhooks:
+  # Must match VALIDATING_WEBHOOK_NAME in src/webhook.rs (caBundle injection key).
+  - name: guard.openshell.lenshq.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ $ec.failurePolicy }}
+    matchPolicy: Equivalent
+    timeoutSeconds: 5
+    namespaceSelector:
+      matchExpressions:
+        - key: {{ $ec.namespaceLabel }}
+          operator: In
+          values: ["enabled"]
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system", "kube-node-lease"]
+    clientConfig:
+      service:
+        name: {{ include "openshell-operator.webhookServiceName" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate/guard
+        port: 443
+    rules:
+      # attach reaches the root supervisor's stdio; ephemeral/debug containers
+      # run unwrapped. Both bypass the exec rewrite, so deny them on sandbox pods.
+      - operations: ["CONNECT"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/attach"]
+      - operations: ["UPDATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/ephemeralcontainers"]
+{{- end }}

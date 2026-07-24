@@ -12,7 +12,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 
 use openshell_operator::gateway::{GatewayConfig, SdkGateway};
 use openshell_operator::health::Health;
-use openshell_operator::{controllers, health, leader};
+use openshell_operator::{controllers, health, leader, webhook};
 
 /// Address the liveness/readiness probe server listens on.
 const DEFAULT_HEALTH_LISTEN: &str = "0.0.0.0:8080";
@@ -50,6 +50,26 @@ async fn main() -> anyhow::Result<()> {
     let gateway = Arc::new(SdkGateway::connect(config).await?);
 
     let kube = Client::try_default().await?;
+
+    // Start the admission webhook (if enabled) before the leader gate, so every
+    // replica — leader and standby alike — answers behind the webhook Service.
+    // Bootstrap (issue cert, inject caBundle) runs synchronously so a failure
+    // aborts startup; only the accept loop is detached.
+    if let Some(config) = webhook::Config::from_env()? {
+        info!(listen = %config.listen, "starting admission webhook");
+        let prepared = webhook::bootstrap(kube.clone(), config).await?;
+        tokio::spawn(async move {
+            // Fatal: unlike the probe server (whose death trips liveness), a dead
+            // webhook listener has no probe of its own, and with failurePolicy=Fail
+            // it silently blocks exec in every confined namespace. Exit so
+            // Kubernetes restarts this replica.
+            match webhook::serve(prepared).await {
+                Ok(()) => error!("admission webhook server stopped; exiting"),
+                Err(err) => error!(%err, "admission webhook server stopped; exiting"),
+            }
+            std::process::exit(1);
+        });
+    }
 
     // Clients are built — this replica is ready to work (or to stand by).
     health.mark_ready();

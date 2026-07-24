@@ -127,6 +127,25 @@ mode defaults to the gateway's self-signed server-cert Secret; empty otherwise.
 {{- end -}}
 
 {{/*
+Admission-webhook resource names. The webhook config names are cluster-scoped,
+so they carry the release-scoped fullname to stay unique across installs. The
+operator injects the caBundle into the two configs by these exact names, so keep
+them in sync with the constants in src/webhook.rs.
+*/}}
+{{- define "openshell-operator.webhookServiceName" -}}
+{{- printf "%s-webhook" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+{{- define "openshell-operator.webhookSecretName" -}}
+{{- printf "%s-webhook-tls" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+{{- define "openshell-operator.webhookMutatingName" -}}
+{{- printf "%s-exec" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+{{- define "openshell-operator.webhookValidatingName" -}}
+{{- printf "%s-guard" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+
+{{/*
 Issuer serve selector labels (distinct component within the release).
 */}}
 {{- define "openshell-operator.issuerSelectorLabels" -}}

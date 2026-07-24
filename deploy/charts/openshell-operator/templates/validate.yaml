@@ -23,3 +23,7 @@
 {{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
 {{-   fail (printf "replicaCount=%d requires leaderElection.enabled=true: without election every replica reconciles at once. Set replicaCount=1 or enable leader election." (int .Values.replicaCount)) }}
 {{- end }}
+{{- /* The webhook is served by the operator process, so it needs the operator Deployment. */ -}}
+{{- if and .Values.webhook.execConfinement.enabled (not .Values.operator.deployStandalone) }}
+{{-   fail "webhook.execConfinement.enabled=true requires operator.deployStandalone=true: the admission webhook is served by the operator process, which a CRDs+RBAC-only install does not run." }}
+{{- end }}
