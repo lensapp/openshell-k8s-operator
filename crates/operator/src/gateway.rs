@@ -364,6 +364,10 @@ impl Gateway for SdkGateway {
         match grpc
             .get_sandbox(GetSandboxRequest {
                 name: name.to_owned(),
+                // v0.0.90 added workspace scoping across the API. Empty resolves
+                // to the gateway's "default" workspace — the operator's existing
+                // behaviour; surfacing workspaces on the CRDs is a separate change.
+                workspace: String::new(),
             })
             .await
         {
@@ -388,6 +392,7 @@ impl Gateway for SdkGateway {
                 // several providers in one reconcile (each attach bumps the
                 // version), so pinning a pre-read version would self-conflict.
                 expected_resource_version: 0,
+                workspace: String::new(),
             })
             .await?;
         Ok(())
@@ -400,19 +405,31 @@ impl Gateway for SdkGateway {
                 sandbox_name: sandbox.to_owned(),
                 provider_name: provider.to_owned(),
                 expected_resource_version: 0,
+                workspace: String::new(),
             })
             .await?;
         Ok(())
     }
 
     async fn update_policy(&self, sandbox: &str, policy: proto::SandboxPolicy) -> Result<()> {
+        // Spelled out rather than `..default()` so a future proto field fails the
+        // build here and gets re-checked — the gateway proto is an external
+        // contract. The operator only pushes a full policy; the per-setting and
+        // merge modes are unused, and annotations/workspace stay at their empty
+        // (no-change / "default" workspace) values.
         let request = UpdateConfigRequest {
             name: sandbox.to_owned(),
             policy: Some(policy),
+            setting_key: String::new(),
+            setting_value: None,
+            delete_setting: false,
+            global: false,
+            merge_operations: Vec::new(),
             // 0 → apply against the current resource version; the operator is the
             // sole writer, matching attach/detach above.
             expected_resource_version: 0,
-            ..UpdateConfigRequest::default()
+            annotations: HashMap::new(),
+            workspace: String::new(),
         };
         match self.grpc().await?.update_config(request).await {
             Ok(_) => Ok(()),
@@ -434,6 +451,7 @@ impl Gateway for SdkGateway {
         let existing = match grpc
             .get_provider(GetProviderRequest {
                 name: input.name.clone(),
+                workspace: String::new(),
             })
             .await
         {
@@ -457,17 +475,22 @@ impl Gateway for SdkGateway {
             config: input.config.into_iter().collect(),
             // Credential expiry is not modelled in v1.
             credential_expires_at_ms: HashMap::new(),
+            // Empty = the provider's type profile lives in the platform/global
+            // scope (current behaviour); must match metadata.workspace, also empty.
+            profile_workspace: String::new(),
         };
 
         if existing.is_some() {
             grpc.update_provider(UpdateProviderRequest {
                 provider: Some(provider),
                 credential_expires_at_ms: HashMap::new(),
+                workspace: String::new(),
             })
             .await?;
         } else {
             grpc.create_provider(CreateProviderRequest {
                 provider: Some(provider),
+                workspace: String::new(),
             })
             .await?;
         }
@@ -479,6 +502,7 @@ impl Gateway for SdkGateway {
         let response = grpc
             .delete_provider(DeleteProviderRequest {
                 name: name.to_owned(),
+                workspace: String::new(),
             })
             .await?;
         Ok(response.into_inner().deleted)
@@ -486,8 +510,14 @@ impl Gateway for SdkGateway {
 
     async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfileView>> {
         let mut grpc = self.grpc().await?;
+        // Spelled out (not `::default()`) so a new proto field fails the build.
+        // No paging; empty workspace lists the platform/global profiles.
         let response = grpc
-            .list_provider_profiles(proto::ListProviderProfilesRequest::default())
+            .list_provider_profiles(proto::ListProviderProfilesRequest {
+                limit: 0,
+                offset: 0,
+                workspace: String::new(),
+            })
             .await?;
         Ok(response
             .into_inner()
@@ -507,6 +537,7 @@ impl Gateway for SdkGateway {
             secret_material_keys: input.plan.secret_material_keys,
             // The credential's own expiry is managed by the refresh loop.
             expires_at_ms: None,
+            workspace: String::new(),
         })
         .await?;
         Ok(())
@@ -653,6 +684,7 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
         name,
         labels: HashMap::new(),
         annotations: HashMap::new(),
+        workspace: String::new(),
     }
 }
 
