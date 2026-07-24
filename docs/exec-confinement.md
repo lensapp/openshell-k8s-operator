@@ -15,7 +15,9 @@ confinement. Gateway RBAC governs exec *through the gateway API* (see
 [operator-auth.md](operator-auth.md)); it does not govern a direct `kubectl
 exec` against the pod, which is a pure Kubernetes operation.
 
-This is opt-in and off by default (`webhook.execConfinement.enabled`).
+It is controlled by `webhook.execConfinement.enabled`, which defaults to
+`gateway.bundled`: on for the batteries-included bundled install, opt-in for a
+bring-your-own gateway (see [Enabling it](#enabling-it)).
 
 ## The mechanism
 
@@ -76,14 +78,22 @@ never silently downgraded to an unconfined root shell. `Ignore` is available for
 those who want fail-open, but it reopens root exec exactly when an attacker can
 induce webhook downtime.
 
-The blast radius is bounded by a `namespaceSelector`: the webhooks fire **only**
-in namespaces labelled `openshell.lenshq.io/exec-confinement: enabled` (and never
-in `kube-system` / `kube-node-lease`, belt-and-braces). An unlabelled cluster
-sees zero webhook calls. Crucially, the webhooks match only `pods/exec`,
-`pods/attach`, and `pods/ephemeralcontainers` — **never pod creation** — so a
-webhook outage can never wedge scheduling, node drains, or workload creation. The
-worst case is "can't `kubectl exec` into a confined namespace until the operator
-is back," an interactive operation that humans retry.
+The blast radius is bounded by a `namespaceSelector`, scoped by install mode:
+
+- **Bundled** (`gateway.bundled=true`): the bundled gateway places sandboxes in
+  the release namespace (its `sandbox_namespace`), so the selector targets
+  exactly that namespace via the built-in `kubernetes.io/metadata.name` label —
+  no labelling step, and the fail-closed radius is the operator's own namespace.
+- **BYO** (`gateway.bundled=false`): sandbox placement is outside our control, so
+  the selector matches namespaces the admin opts in with
+  `openshell.lenshq.io/exec-confinement: enabled` (and never `kube-system` /
+  `kube-node-lease`). An unlabelled cluster sees zero webhook calls.
+
+Crucially, the webhooks match only `pods/exec`, `pods/attach`, and
+`pods/ephemeralcontainers` — **never pod creation** — so a webhook outage can
+never wedge scheduling, node drains, or workload creation. The worst case is
+"can't `kubectl exec` into a confined namespace until the operator is back," an
+interactive operation that humans retry.
 
 Because exec now re-derives policy from the gateway, exec into a sandbox depends
 on gateway availability — gateway down means exec fails (consistent with
@@ -107,17 +117,30 @@ to `ignoreDifferences` so it isn't flagged as drift.
 
 ## Enabling it
 
-```yaml
-webhook:
-  execConfinement:
-    enabled: true
-```
+`webhook.execConfinement.enabled` is a tri-state. Left unset (the default) it
+**follows `gateway.bundled`**:
 
-Then label the namespaces whose sandboxes should be confined:
+- **Bundled install** (the default): on automatically. The operator knows
+  sandboxes land in the release namespace and scopes the webhook there — no
+  further steps.
+- **BYO gateway**: off. Sandbox placement is outside our control, and the
+  fail-closed availability tradeoff is the operator's to make deliberately, so
+  opt in explicitly and label the sandbox namespaces:
 
-```
-kubectl label namespace <ns> openshell.lenshq.io/exec-confinement=enabled
-```
+  ```yaml
+  gateway:
+    bundled: false
+  webhook:
+    execConfinement:
+      enabled: true
+  ```
+
+  ```
+  kubectl label namespace <ns> openshell.lenshq.io/exec-confinement=enabled
+  ```
+
+Set `enabled: true`/`false` to override the `gateway.bundled`-derived default
+either way.
 
 The `wrapper` argv defaults to the supervisor entrypoint baked into the sandbox
 image (`/opt/openshell/bin/openshell-sandbox --mode=process --`); override it

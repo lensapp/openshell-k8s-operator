@@ -24,6 +24,6 @@
 {{-   fail (printf "replicaCount=%d requires leaderElection.enabled=true: without election every replica reconciles at once. Set replicaCount=1 or enable leader election." (int .Values.replicaCount)) }}
 {{- end }}
 {{- /* The webhook is served by the operator process, so it needs the operator Deployment. */ -}}
-{{- if and .Values.webhook.execConfinement.enabled (not .Values.operator.deployStandalone) }}
-{{-   fail "webhook.execConfinement.enabled=true requires operator.deployStandalone=true: the admission webhook is served by the operator process, which a CRDs+RBAC-only install does not run." }}
+{{- if and (eq (include "openshell-operator.webhookEnabled" .) "true") (not .Values.operator.deployStandalone) }}
+{{-   fail "exec-confinement webhook requires operator.deployStandalone=true: it is served by the operator process, which a CRDs+RBAC-only install does not run. Set webhook.execConfinement.enabled=false or operator.deployStandalone=true." }}
 {{- end }}

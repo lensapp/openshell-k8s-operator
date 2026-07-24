@@ -35,7 +35,7 @@ rules:
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]
     verbs: ["create", "patch"]
-  {{- if .Values.webhook.execConfinement.enabled }}
+  {{- if eq (include "openshell-operator.webhookEnabled" .) "true" }}
   # The exec-confinement webhook GETs the pod being exec'd/attached to classify
   # it as a sandbox (by its agents.x-k8s.io/Sandbox ownerReference).
   - apiGroups: [""]

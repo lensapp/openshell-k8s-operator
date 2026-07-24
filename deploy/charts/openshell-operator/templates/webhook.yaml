@@ -1,4 +1,4 @@
-{{- if .Values.webhook.execConfinement.enabled -}}
+{{- if eq (include "openshell-operator.webhookEnabled" .) "true" -}}
 {{- $ec := .Values.webhook.execConfinement -}}
 apiVersion: v1
 kind: Service
@@ -39,14 +39,7 @@ webhooks:
     timeoutSeconds: 5
     namespaceSelector:
       matchExpressions:
-        # Fire only in namespaces the operator's admins opted in.
-        - key: {{ $ec.namespaceLabel }}
-          operator: In
-          values: ["enabled"]
-        # Never touch control-plane namespaces, even if mislabelled.
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values: ["kube-system", "kube-node-lease"]
+        {{- include "openshell-operator.webhookNsMatchExpressions" . | nindent 8 }}
     clientConfig:
       service:
         name: {{ include "openshell-operator.webhookServiceName" . }}
@@ -75,12 +68,7 @@ webhooks:
     timeoutSeconds: 5
     namespaceSelector:
       matchExpressions:
-        - key: {{ $ec.namespaceLabel }}
-          operator: In
-          values: ["enabled"]
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values: ["kube-system", "kube-node-lease"]
+        {{- include "openshell-operator.webhookNsMatchExpressions" . | nindent 8 }}
     clientConfig:
       service:
         name: {{ include "openshell-operator.webhookServiceName" . }}
