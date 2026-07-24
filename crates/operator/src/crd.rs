@@ -114,6 +114,15 @@ pub struct OpenShellSandboxSpec {
     /// pod). Immutable on a running sandbox — a change recreates it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
+
+    /// Gateway workspace this sandbox belongs to — the name of an
+    /// `OpenShellWorkspace` (cluster-scoped). Empty/omitted uses the gateway's
+    /// `default` workspace. **Immutable**: the gateway names its objects
+    /// `{workspace}--{name}`, so changing the workspace would orphan the old
+    /// gateway sandbox rather than move it; delete and recreate the resource to
+    /// place a sandbox in a different workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 /// Compute resource requests and limits for a sandbox pod, mirroring the
@@ -269,6 +278,14 @@ pub struct OpenShellProviderSpec {
     /// Non-secret provider configuration passed through to the gateway.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub config: BTreeMap<String, String>,
+
+    /// Gateway workspace this provider belongs to — the name of an
+    /// `OpenShellWorkspace` (cluster-scoped). Empty/omitted uses the gateway's
+    /// `default` workspace. **Immutable**: a provider's gateway identity is
+    /// `(workspace, name)`, so changing the workspace would target a different
+    /// object; delete and recreate the resource to move it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 /// Reference to a Secret providing credential values.
@@ -447,4 +464,97 @@ pub struct OpenShellPolicyStatus {
     /// `.metadata.generation` last reconciled, for GitOps health checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_generation: Option<i64>,
+}
+
+/// A gateway workspace — a hard isolation boundary for sandboxes and providers.
+///
+/// **Cluster-scoped**: gateway workspace names are a single flat, global
+/// namespace (the gateway names objects `{workspace}--{name}`), so this maps
+/// 1:1 to a cluster-scoped resource whose `metadata.name` *is* the gateway
+/// workspace name — a tenant, like a `Namespace` or `StorageClass`, not a
+/// per-team resource. Namespaced `OpenShellSandbox`/`OpenShellProvider`
+/// reference it by plain name via `spec.workspace`, defaulting to `default`.
+///
+/// The operator creates the workspace on the gateway and, when `spec.members`
+/// is set, reconciles its membership. It owns gateway state, so a finalizer
+/// guards deletion: it refuses while any sandbox or provider still references
+/// the workspace (deleting a non-empty workspace permanently wedges it on the
+/// gateway), and it leaves the built-in `default` workspace untouched.
+#[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[kube(
+    group = "openshell.lenshq.io",
+    version = "v1alpha1",
+    kind = "OpenShellWorkspace",
+    status = "OpenShellWorkspaceStatus",
+    shortname = "osw",
+    printcolumn = r#"{"name":"Phase","type":"string","jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Ready","type":"string","jsonPath":".status.conditions[?(@.type==\"Ready\")].status"}"#,
+    printcolumn = r#"{"name":"Age","type":"date","jsonPath":".metadata.creationTimestamp"}"#
+)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenShellWorkspaceSpec {
+    /// Labels applied to the gateway workspace. **Create-time only**: the
+    /// gateway has no workspace-update RPC, so edits after the workspace exists
+    /// do not converge (and the operator does not fake them).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+
+    /// Declarative workspace membership.
+    ///
+    /// When set — even to an empty list — the operator treats it as
+    /// authoritative and converges the gateway's members to exactly this set:
+    /// adding those missing, removing those not listed, and re-granting on a
+    /// role change. When omitted (`None`), the operator does not touch
+    /// membership at all, leaving it to out-of-band tooling (the gateway CLI or
+    /// a human admin).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<Vec<WorkspaceMember>>,
+}
+
+/// A workspace member: an OIDC principal and the role it holds.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMember {
+    /// OIDC subject claim (`sub`) identifying the principal.
+    pub subject: String,
+
+    /// Role granted to the principal within this workspace.
+    pub role: WorkspaceRole,
+}
+
+/// Role a workspace member holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub enum WorkspaceRole {
+    /// Regular member: use the workspace's resources.
+    User,
+    /// Administrator: manage the workspace and its membership.
+    Admin,
+}
+
+/// Observed state mirrored from the gateway for an `OpenShellWorkspace`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenShellWorkspaceStatus {
+    /// Standard conditions; the `Ready` condition reports reconcile health and,
+    /// on failure, a machine-readable `reason` and human `message`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+
+    /// Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`,
+    /// which reports the operator's own reconcile outcome).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<WorkspacePhase>,
+
+    /// `.metadata.generation` last reconciled, for GitOps health checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_generation: Option<i64>,
+}
+
+/// Coarse workspace lifecycle phase surfaced in `.status.phase`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub enum WorkspacePhase {
+    /// Workspace is active and usable.
+    Active,
+    /// Workspace is being torn down on the gateway.
+    Terminating,
 }

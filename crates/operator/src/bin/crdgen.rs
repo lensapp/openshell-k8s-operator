@@ -7,7 +7,9 @@
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::CustomResourceExt;
-use openshell_operator::crd::{OpenShellPolicy, OpenShellProvider, OpenShellSandbox};
+use openshell_operator::crd::{
+    OpenShellPolicy, OpenShellProvider, OpenShellSandbox, OpenShellWorkspace,
+};
 
 /// The Helm chart renders these CRDs as ordinary release resources (so
 /// `helm upgrade` updates them). Without this, `helm uninstall` would delete
@@ -29,6 +31,8 @@ fn main() {
             .expect("serialize OpenShellProvider CRD"),
         serde_yaml::to_string(&keep(OpenShellPolicy::crd()))
             .expect("serialize OpenShellPolicy CRD"),
+        serde_yaml::to_string(&keep(OpenShellWorkspace::crd()))
+            .expect("serialize OpenShellWorkspace CRD"),
     ] {
         println!("---");
         print!("{crd}");

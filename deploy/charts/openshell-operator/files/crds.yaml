@@ -316,6 +316,10 @@ spec:
                   - name
                   type: object
                 type: array
+              workspace:
+                description: 'Gateway workspace this sandbox belongs to — the name of an `OpenShellWorkspace` (cluster-scoped). Empty/omitted uses the gateway''s `default` workspace. **Immutable**: the gateway names its objects `{workspace}--{name}`, so changing the workspace would orphan the old gateway sandbox rather than move it; delete and recreate the resource to place a sandbox in a different workspace.'
+                nullable: true
+                type: string
             type: object
           status:
             description: Observed state mirrored from the gateway.
@@ -452,6 +456,10 @@ spec:
                 type: object
               type:
                 description: Canonical provider type slug (e.g. `claude`, `gitlab`). Immutable — enforced by the validating webhook (milestone 4).
+                type: string
+              workspace:
+                description: 'Gateway workspace this provider belongs to — the name of an `OpenShellWorkspace` (cluster-scoped). Empty/omitted uses the gateway''s `default` workspace. **Immutable**: a provider''s gateway identity is `(workspace, name)`, so changing the workspace would target a different object; delete and recreate the resource to move it.'
+                nullable: true
                 type: string
             required:
             - credentialsSecretRef
@@ -654,6 +662,134 @@ spec:
         required:
         - spec
         title: OpenShellPolicy
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  name: openshellworkspaces.openshell.lenshq.io
+spec:
+  group: openshell.lenshq.io
+  names:
+    categories: []
+    kind: OpenShellWorkspace
+    plural: openshellworkspaces
+    shortNames:
+    - osw
+    singular: openshellworkspace
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Auto-generated derived type for OpenShellWorkspaceSpec via `CustomResource`
+        properties:
+          spec:
+            description: |-
+              A gateway workspace — a hard isolation boundary for sandboxes and providers.
+
+              **Cluster-scoped**: gateway workspace names are a single flat, global namespace (the gateway names objects `{workspace}--{name}`), so this maps 1:1 to a cluster-scoped resource whose `metadata.name` *is* the gateway workspace name — a tenant, like a `Namespace` or `StorageClass`, not a per-team resource. Namespaced `OpenShellSandbox`/`OpenShellProvider` reference it by plain name via `spec.workspace`, defaulting to `default`.
+
+              The operator creates the workspace on the gateway and, when `spec.members` is set, reconciles its membership. It owns gateway state, so a finalizer guards deletion: it refuses while any sandbox or provider still references the workspace (deleting a non-empty workspace permanently wedges it on the gateway), and it leaves the built-in `default` workspace untouched.
+            properties:
+              labels:
+                additionalProperties:
+                  type: string
+                description: 'Labels applied to the gateway workspace. **Create-time only**: the gateway has no workspace-update RPC, so edits after the workspace exists do not converge (and the operator does not fake them).'
+                type: object
+              members:
+                description: |-
+                  Declarative workspace membership.
+
+                  When set — even to an empty list — the operator treats it as authoritative and converges the gateway's members to exactly this set: adding those missing, removing those not listed, and re-granting on a role change. When omitted (`None`), the operator does not touch membership at all, leaving it to out-of-band tooling (the gateway CLI or a human admin).
+                items:
+                  description: 'A workspace member: an OIDC principal and the role it holds.'
+                  properties:
+                    role:
+                      description: Role granted to the principal within this workspace.
+                      enum:
+                      - User
+                      - Admin
+                      type: string
+                    subject:
+                      description: OIDC subject claim (`sub`) identifying the principal.
+                      type: string
+                  required:
+                  - role
+                  - subject
+                  type: object
+                nullable: true
+                type: array
+            type: object
+          status:
+            description: Observed state mirrored from the gateway for an `OpenShellWorkspace`.
+            nullable: true
+            properties:
+              conditions:
+                description: Standard conditions; the `Ready` condition reports reconcile health and, on failure, a machine-readable `reason` and human `message`.
+                items:
+                  description: Condition contains details for one aspect of the current state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: message is a human readable message indicating details about the transition. This may be an empty string.
+                      type: string
+                    observedGeneration:
+                      description: observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance.
+                      format: int64
+                      type: integer
+                    reason:
+                      description: reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty.
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: '`.metadata.generation` last reconciled, for GitOps health checks.'
+                format: int64
+                nullable: true
+                type: integer
+              phase:
+                description: Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`, which reports the operator's own reconcile outcome).
+                enum:
+                - Active
+                - Terminating
+                nullable: true
+                type: string
+            type: object
+        required:
+        - spec
+        title: OpenShellWorkspace
         type: object
     served: true
     storage: true

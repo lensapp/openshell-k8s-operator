@@ -2,7 +2,7 @@
 
 Declarative, Kubernetes-native control over [OpenShell](https://github.com/NVIDIA/OpenShell) sandboxes — manage them with `kubectl apply` instead of talking to the gateway directly.
 
-> **Status:** early development. Three resources are implemented: `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes, in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from a Secret, synced as a static copy or gateway-minted refresh), and `OpenShellPolicy` (a reusable policy applied at sandbox creation).
+> **Status:** early development. Four resources are implemented: `OpenShellSandbox` (full lifecycle — finalizer cleanup, provisioned volumes, in-place convergence, recreate-on-drift), `OpenShellProvider` (credentials from a Secret, synced as a static copy or gateway-minted refresh), `OpenShellPolicy` (a reusable policy applied at sandbox creation), and `OpenShellWorkspace` (a cluster-scoped tenancy boundary with declarative membership).
 
 ## What it does
 
@@ -203,6 +203,31 @@ spec:
 ```
 
 Editing a policy — inline or a shared `OpenShellPolicy` — **is** retroactive: the operator watches referenced policies and reconverges every sandbox that names one. How it converges depends on the section (see [Updates and recreation](#updates-and-recreation)): `networkPolicies` and additive `filesystem` changes are pushed to the live sandbox in place, while `landlock`/`process` changes force a recreate, since the gateway holds those immutable. A shared policy that goes missing or invalid never tears down a running sandbox — the sandbox keeps its last-applied policy and the failure surfaces on its `Ready` condition.
+
+### Workspaces
+
+A workspace is the gateway's isolation boundary for sandboxes and providers. On the gateway its name is a single flat, global namespace, so `OpenShellWorkspace` is **cluster-scoped** — `metadata.name` *is* the gateway workspace name, and creating one or granting it members is cluster-level administration, not something a namespace tenant should self-serve. It is a tenant, like a `Namespace` or `StorageClass`, not a per-team resource.
+
+```yaml
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellWorkspace
+metadata:
+  name: team-ml            # a DNS-1123 label, ≤19 chars, no consecutive hyphens
+spec:
+  labels:
+    owner: ml-platform
+  members:
+    - subject: alice@example.com   # the OIDC `sub` claim
+      role: Admin
+    - subject: bob@example.com
+      role: User
+```
+
+Namespaced `OpenShellSandbox` and `OpenShellProvider` join a workspace with `spec.workspace: team-ml`; an empty or omitted value uses the gateway's built-in `default` workspace (so existing resources are unaffected). `spec.workspace` is **immutable** — the gateway names its objects `{workspace}--{name}`, so a change would orphan the old object rather than move it; delete and recreate the resource to place it elsewhere.
+
+Membership is authoritative when `spec.members` is present (even empty): the operator converges the gateway's members to exactly the listed set — adding, removing, and re-granting on a role change. Omit `spec.members` entirely to leave membership to out-of-band tooling; the operator then manages only the workspace's lifecycle. `spec.labels` are applied at creation only — the gateway has no workspace-update RPC, so later label edits do not converge.
+
+Deletion is guarded by a finalizer. Because the gateway marks a workspace terminating *before* it checks for blockers — with no undelete — deleting one that still holds resources would permanently wedge it. So the operator refuses to delete a workspace while any `OpenShellSandbox` or `OpenShellProvider` still references it (surfacing `WorkspaceNotEmpty` on the `Ready` condition until it is emptied), and it never deletes the built-in `default`.
 
 ### Persistent volumes
 

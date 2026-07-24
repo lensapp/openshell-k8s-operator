@@ -10,12 +10,14 @@ gateway API calls and mirrors gateway state back into `.status`. It does **not**
 reimplement the gateway.
 
 Status: `OpenShellSandbox` (create/get/delete), `Provider` (static credentials
-from a Secret, entitlement-checked, synced with a rotation watch), and `Policy`
+from a Secret, entitlement-checked, synced with a rotation watch), `Policy`
 (a reusable policy document validated by the gateway parser and applied to a
-sandbox at creation via `policyRef`) reconcilers. Sandbox and Provider use
-finalizer-based cleanup; Policy owns no gateway state, so it has none. Providers
-v2 (profiles + gateway-managed OAuth2 refresh) is deferred to a separate future
-CRD.
+sandbox at creation via `policyRef`), and `OpenShellWorkspace` (a cluster-scoped
+gateway tenancy boundary with declarative membership, joined by sandboxes and
+providers via `spec.workspace`) reconcilers. Sandbox, Provider, and Workspace
+use finalizer-based cleanup; Policy owns no gateway state, so it has none.
+Providers v2 (profiles + gateway-managed OAuth2 refresh) is deferred to a
+separate future CRD.
 
 The repo is a Cargo workspace with two crates: `crates/operator` (the operator)
 and `crates/issuer` (a small static OIDC issuer — `mint` + `serve` subcommands —
