@@ -3,9 +3,9 @@ name: openshell-operator
 description: Kubernetes operator providing declarative CRDs over the OpenShell gateway
 type: application
 # Chart version; kept in lockstep with appVersion by release-please.
-version: 0.3.0 # x-release-please-version
+version: 0.4.0 # x-release-please-version
 # Operator image version this chart defaults to.
-appVersion: "0.3.0" # x-release-please-version
+appVersion: "0.4.0" # x-release-please-version
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/lensapp/openshell-k8s-operator
 sources:
