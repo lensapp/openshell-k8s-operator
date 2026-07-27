@@ -42,8 +42,9 @@ gateway:
   #
   # Bundled mode pins the gateway to a fixed in-cluster identity
   # (Service `openshell-gateway`, issuer `openshell-issuer`), so run at most one
-  # bundled release per namespace. The bundled gateway uses an ephemeral SQLite
-  # store; provide an external database for anything but dev/demo.
+  # bundled release per namespace. Its SQLite store is PVC-backed, so it survives
+  # pod restarts, but it is per-pod and so cannot scale past a single replica;
+  # provide an external database for anything but dev/demo.
   bundled: true
   # OpenShell gateway control-plane endpoint. Required only when bundled=false —
   # point it at your gateway Service, e.g.

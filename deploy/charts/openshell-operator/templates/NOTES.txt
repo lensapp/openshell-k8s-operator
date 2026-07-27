@@ -19,9 +19,11 @@ admin token — nothing else to configure. Watch it settle:
   kubectl -n {{ .Release.Namespace }} rollout status deploy/openshell-issuer
 
 Notes:
-  - The bundled gateway uses an ephemeral SQLite store and a fixed in-cluster
-    identity, so run at most one bundled release per namespace. Provide an
-    external database and your own gateway (gateway.bundled=false) for prod.
+  - The bundled gateway keeps its SQLite store on a PVC, so state survives pod
+    restarts — but that store is per-pod, so it cannot scale past one replica.
+    It also uses a fixed in-cluster identity, so run at most one bundled release
+    per namespace. Provide an external database and your own gateway
+    (gateway.bundled=false) for prod.
 {{- else }}
 
 Auth: gateway.bundled=false, so you bring your own gateway at
