@@ -1495,6 +1495,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1602,13 +1614,14 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openshell-core"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.91#21da343c9f838bd9ac85dc61bf44889de1a72873"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.92#2d108818f84be568e63232d5d0aba53775cea4f7"
 dependencies = [
  "base64",
  "chrono",
  "glob",
  "ipnet",
  "miette",
+ "nix",
  "prost",
  "prost-types",
  "protobuf-src",
@@ -1679,7 +1692,7 @@ dependencies = [
 [[package]]
 name = "openshell-policy"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.91#21da343c9f838bd9ac85dc61bf44889de1a72873"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.92#2d108818f84be568e63232d5d0aba53775cea4f7"
 dependencies = [
  "miette",
  "openshell-core",
@@ -1692,10 +1705,11 @@ dependencies = [
 [[package]]
 name = "openshell-providers"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.91#21da343c9f838bd9ac85dc61bf44889de1a72873"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.92#2d108818f84be568e63232d5d0aba53775cea4f7"
 dependencies = [
  "glob",
  "openshell-core",
+ "openshell-policy",
  "serde",
  "serde_json",
  "serde_yml",
@@ -1706,7 +1720,7 @@ dependencies = [
 [[package]]
 name = "openshell-sdk"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.91#21da343c9f838bd9ac85dc61bf44889de1a72873"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.92#2d108818f84be568e63232d5d0aba53775cea4f7"
 dependencies = [
  "async-trait",
  "futures",
