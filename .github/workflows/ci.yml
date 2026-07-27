@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      # Vendor the gateway subchart (committed tgz; refreshed from Chart.lock).
+      # Fetch the gateway subchart at the version + digest Chart.lock pins.
       - run: helm dependency build deploy/charts/openshell-operator
       - run: helm lint deploy/charts/openshell-operator
       # Render every posture: bundled default (gateway + issuer + operator), BYO
