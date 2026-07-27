@@ -5,3 +5,7 @@ Cargo.lock.orig
 
 # Internal working design notes — not published.
 PLAN.md
+
+# Helm subcharts vendored by `helm dependency build`. Chart.lock pins the
+# version and digest, so the tarball is a build artifact, not a source.
+/deploy/charts/*/charts/
