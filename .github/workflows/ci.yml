@@ -61,6 +61,72 @@ jobs:
           context: .
           target: ${{ matrix.target }}
           push: false
+          # Shared with the e2e job, which builds the same two targets.
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+  # Full-stack check: stand up gateway + issuer + operator on kind from the
+  # chart, then drive the control-plane CRDs against a real gateway. This is the
+  # only job that proves the reconcilers' gateway calls actually work; the rest
+  # test them against a fake. OpenShellSandbox is out of scope (it needs the
+  # agents.x-k8s.io controller and real sandbox pods) — see test/e2e/run.sh.
+  e2e:
+    runs-on: ubuntu-latest
+    # Every step inside is individually bounded, but cluster creation and image
+    # pulls are not — this keeps a wedged run from burning the 6h default.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Built locally and side-loaded into kind, so the chart runs the code under
+      # test rather than a published tag. Cached with the `docker` job, which
+      # builds the same two targets.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: operator
+          tags: openshell-operator:e2e
+          load: true
+          cache-from: type=gha,scope=operator
+          cache-to: type=gha,mode=max,scope=operator
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: issuer
+          tags: openshell-issuer:e2e
+          load: true
+          cache-from: type=gha,scope=issuer
+          cache-to: type=gha,mode=max,scope=issuer
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: e2e
+      - name: Load images into kind
+        run: kind load docker-image openshell-operator:e2e openshell-issuer:e2e --name e2e
+      # The batteries-included posture: one install brings up all three, with the
+      # gateway subchart fetched at the version Chart.lock pins. pullPolicy=Never
+      # keeps kubelet on the side-loaded images instead of reaching for a registry.
+      - name: Install the chart
+        run: |
+          helm dependency build deploy/charts/openshell-operator
+          helm install openshell deploy/charts/openshell-operator \
+            --namespace openshell-system --create-namespace \
+            --set image.repository=openshell-operator \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set auth.issuer.repository=openshell-issuer \
+            --set auth.issuer.tag=e2e \
+            --set auth.issuer.pullPolicy=Never \
+            --wait --timeout 10m
+      - name: Run e2e checks
+        run: NAMESPACE=openshell-system test/e2e/run.sh
+      # The script dumps its own diagnostics when an assertion fails; this covers
+      # the install failing before it ever runs.
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods,jobs -A
+          kubectl get events -n openshell-system --sort-by=.lastTimestamp | tail -40
+          kubectl describe pods -n openshell-system | tail -120
 
   # Backstop for the commit-msg hook: reject non-Conventional-Commit subjects so
   # release-please always picks up changes. Uses the same shared validator.
