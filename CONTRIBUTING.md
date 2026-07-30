@@ -66,6 +66,22 @@ testable without a cluster or a live gateway:
 - **Reconcilers** (`controllers/`) depend on a `Gateway` trait and are tested
   against a fake gateway, so a loop's behavior is asserted without the SDK.
 
+What a fake gateway cannot prove — that the calls the reconcilers make are the
+calls a real gateway accepts — is covered by [`test/e2e/run.sh`](test/e2e/run.sh).
+CI runs it on kind after installing the chart; it runs unchanged against any
+cluster that has the chart installed:
+
+```bash
+NAMESPACE=openshell-system test/e2e/run.sh
+```
+
+The `OpenShellSandbox` section drives a real sandbox pod, so it runs only where
+the [Agent Sandbox](https://agent-sandbox.sigs.k8s.io) controller is installed
+(see the README's prerequisite) and skips itself otherwise. `SANDBOX_E2E=1`
+turns that skip into a failure — CI sets it, so the section cannot go missing
+unnoticed. Expect the first run to spend a minute or two pulling the sandbox
+image.
+
 ## Pull Request Guidelines
 
 - Keep changes small and focused.
