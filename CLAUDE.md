@@ -63,6 +63,8 @@ A Cargo workspace with two crates.
 
 ## Dependencies
 
-`openshell-sdk` / `openshell-core` are git dependencies pinned to an exact rev on
-NVIDIA/OpenShell `main`. Bump deliberately; treat the gRPC proto as an external
-contract.
+`openshell-sdk`, `openshell-core`, `openshell-policy`, and `openshell-providers`
+are git dependencies pinned to an NVIDIA/OpenShell release tag — the same release
+the chart pins as its bundled gateway subchart (`deploy/charts/openshell-operator/Chart.yaml`).
+Bump the crate tag and the subchart pin in lockstep, deliberately; treat the gRPC
+proto as an external contract.

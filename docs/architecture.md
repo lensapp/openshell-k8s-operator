@@ -204,9 +204,11 @@ representative:
   gateway's own `extract_typed_resources` parser
   (`{requests:{cpu,memory}, limits:{cpu,memory}}` with string values).
 
-The `openshell-sdk` / `openshell-core` dependencies are pinned to an exact git
-rev. The gRPC proto is treated as an **external contract**: bumps are deliberate,
-and the mapping code is the one place that has to change when it moves.
+The `openshell-sdk` / `openshell-core` / `openshell-policy` / `openshell-providers`
+dependencies are pinned to an upstream release tag, kept in lockstep with the
+bundled gateway subchart version in `Chart.yaml`. The gRPC proto is treated as an
+**external contract**: bumps are deliberate, and the mapping code is the one place
+that has to change when it moves.
 
 ## Authentication
 
