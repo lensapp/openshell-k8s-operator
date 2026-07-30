@@ -308,7 +308,7 @@ cargo run --bin openshell-operator   # against the current kubecontext; expects 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full verification gate, the pinned toolchain, the git hooks, CRD regeneration, and commit conventions.
 
-`openshell-sdk` and `openshell-core` are consumed as git dependencies pinned to an exact revision of NVIDIA/OpenShell `main`.
+`openshell-sdk`, `openshell-core`, `openshell-policy`, and `openshell-providers` are consumed as git dependencies pinned to an NVIDIA/OpenShell release tag — the same release the chart pins as its bundled gateway subchart, so the client crates and the gateway they talk to always come from one upstream release. Bump both pins together.
 
 ### Releases
 
