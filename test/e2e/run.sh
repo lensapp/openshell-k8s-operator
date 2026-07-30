@@ -9,13 +9,16 @@
 # touches resources it creates (all named `e2e-*`), so it is safe to run against
 # a development cluster with other resources in it.
 #
-# `OpenShellSandbox` is out of scope: it needs the agents.x-k8s.io sandbox
-# controller and real sandbox pods. Everything here exercises the operator's
-# translation into gateway calls, which is what the reconcilers actually own.
+# The `OpenShellSandbox` section needs the agents.x-k8s.io sandbox controller
+# and pulls a real sandbox image, so it runs only when that CRD is present. Set
+# SANDBOX_E2E=1 to make its absence a failure instead of a skip, or 0 to skip
+# the section outright.
 #
 #   NAMESPACE=openshell-system test/e2e/run.sh
 
-set -euo pipefail
+# -E so the ERR trap reaches inside functions: without it a failed check in
+# `sandbox_checks` would exit with no diagnostics at all.
+set -Eeuo pipefail
 
 NAMESPACE="${NAMESPACE:-openshell-system}"
 # Generous: the gateway is reached over the network and reconciles are requeued
@@ -23,12 +26,19 @@ NAMESPACE="${NAMESPACE:-openshell-system}"
 TIMEOUT="${TIMEOUT:-90s}"
 # How long a status field may take to reach an expected value, in seconds.
 POLL_SECONDS="${POLL_SECONDS:-90}"
+# Sandboxes are slower than the control-plane kinds by a different order: a real
+# pod is scheduled and the sandbox image (~1.4 GB) is pulled on first use.
+SANDBOX_TIMEOUT="${SANDBOX_TIMEOUT:-600s}"
+SANDBOX_POLL_SECONDS="${SANDBOX_POLL_SECONDS:-600}"
+# auto — run the sandbox section when the agents.x-k8s.io CRD is there.
+SANDBOX_E2E="${SANDBOX_E2E:-auto}"
 
 PASSED=0
 
 log()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()   { printf '  \033[32mok\033[0m %s\n' "$*"; PASSED=$((PASSED + 1)); }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*" >&2; return 1; }
+skip() { printf '  \033[33mskip\033[0m %s\n' "$*"; }
 
 # Delete every resource this script creates. Providers go first: they are what
 # holds the profile and workspace finalizers open, so removing them lets the
@@ -38,7 +48,15 @@ fail() { printf '  \033[31mFAIL\033[0m %s\n' "$*" >&2; return 1; }
 # nothing holds their finalizers, and leaving them mid-deletion would make an
 # immediate re-run fail on "object is being deleted".
 cleanup() {
+  # Best-effort deletes: a failure here is not a finding, so it must not drag
+  # the ERR trap in behind a run that otherwise passed.
+  trap - ERR
   set +e
+  # Sandboxes first: their finalizer deletes the gateway sandbox, and the PVCs
+  # they provisioned outlive them by design (volumeRetention: Retain). Those
+  # PVCs carry the operator's own sandbox label, not the script's `e2e` one.
+  kubectl delete openshellsandbox -n "$NAMESPACE" -l e2e=true --wait=true --timeout=120s >/dev/null 2>&1
+  kubectl delete pvc -n "$NAMESPACE" -l openshell.lenshq.io/sandbox=e2e-sandbox --wait=false >/dev/null 2>&1
   kubectl delete openshellprovider -n "$NAMESPACE" -l e2e=true --wait=true --timeout=60s >/dev/null 2>&1
   kubectl delete openshellproviderprofile -l e2e=true --wait=true --timeout=60s >/dev/null 2>&1
   kubectl delete openshellworkspace -l e2e=true --wait=true --timeout=60s >/dev/null 2>&1
@@ -52,6 +70,7 @@ diagnose() {
   printf '\n\033[31m=== e2e failed; dumping diagnostics ===\033[0m\n' >&2
   kubectl get openshellworkspace,openshellproviderprofile -o wide >&2 2>&1 || true
   kubectl get openshellprovider,openshellpolicy -n "$NAMESPACE" -o wide >&2 2>&1 || true
+  kubectl get openshellsandbox,pvc -n "$NAMESPACE" -o wide >&2 2>&1 || true
   kubectl get pods -n "$NAMESPACE" >&2 2>&1 || true
   printf '\n--- operator logs ---\n' >&2
   kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=openshell-operator --tail=80 >&2 2>&1 || true
@@ -73,6 +92,34 @@ await() { # await <resource> <jsonpath> <expected> [-n namespace]
     sleep 2
   done
   fail "$resource $path: expected '$expected', got '$actual'"
+}
+
+# Poll until a status field holds something other than <previous> — for values
+# whose new content is the operator's to choose (a fresh sandbox id, a rehashed
+# fingerprint). An empty read does not count: a field cleared mid-recreate is
+# not yet the new value.
+away() { # away <resource> <jsonpath> <previous> [-n namespace]
+  local resource="$1" path="$2" previous="$3"; shift 3
+  local deadline=$((SECONDS + POLL_SECONDS)) actual=''
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    actual="$(kubectl get "$resource" "$@" -o jsonpath="$path" 2>/dev/null || true)"
+    [ -n "$actual" ] && [ "$actual" != "$previous" ] && return 0
+    sleep 2
+  done
+  fail "$resource $path: still '$previous' after ${POLL_SECONDS}s"
+}
+
+# Poll until the resource has emitted an event with <reason>. Needs kubectl
+# 1.26 or newer for `kubectl events --for`; an older one just never matches.
+event() { # event <kind/name> <reason>
+  local resource="$1" reason="$2"
+  local deadline=$((SECONDS + POLL_SECONDS))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    kubectl events -n "$NAMESPACE" --for "$resource" -o jsonpath='{.items[*].reason}' 2>/dev/null \
+      | grep -qw "$reason" && return 0
+    sleep 2
+  done
+  fail "$resource emitted no $reason event"
 }
 
 # Read one status field.
@@ -293,5 +340,121 @@ while kubectl get openshellworkspace e2ews >/dev/null 2>&1; do
   sleep 2
 done
 ok "workspace deletes once emptied"
+
+# --------------------------------------------------------------------------
+log "OpenShellSandbox: lifecycle, in-place policy update, recreate, volumes"
+# --------------------------------------------------------------------------
+# The only section that drives a real sandbox pod end to end. It owns its own
+# policy: the checks below mutate it, and the sections above assert on theirs.
+#
+# `spec.image` is deliberately unset so the gateway picks its own default image
+# — the test then has no image reference of its own to keep current.
+sandbox_checks() {
+  # Every poll in this section waits on a pod, not on a gRPC round trip, so it
+  # gets the sandbox budget. `local` is what raises it for the `await` / `away`
+  # calls below: they read POLL_SECONDS while this function is on the stack.
+  local POLL_SECONDS="$SANDBOX_POLL_SECONDS"
+
+  kubectl apply -f - >/dev/null <<EOF
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellPolicy
+metadata: { name: e2e-sandbox-policy, namespace: $NAMESPACE, labels: { e2e: "true" } }
+spec:
+  version: 1
+  filesystem: { includeWorkdir: true }
+---
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellSandbox
+metadata: { name: e2e-sandbox, namespace: $NAMESPACE, labels: { e2e: "true" } }
+spec:
+  policyRef: e2e-sandbox-policy
+  volumes:
+    - name: work
+      mountPath: /data
+      claim:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 1Gi } }
+EOF
+  kubectl wait --for=condition=Ready --timeout="$SANDBOX_TIMEOUT" \
+    -n "$NAMESPACE" openshellsandbox/e2e-sandbox >/dev/null
+  ok "sandbox reports Ready"
+  await openshellsandbox/e2e-sandbox '{.status.phase}' Ready -n "$NAMESPACE"
+  ok "gateway phase mirrored as Ready"
+
+  local sandbox_id policy_hash spec_hash pvc_uid
+  sandbox_id="$(field openshellsandbox/e2e-sandbox '{.status.sandboxId}' -n "$NAMESPACE")"
+  [ -n "$sandbox_id" ] || fail "sandbox status.sandboxId is empty while Ready"
+  ok "gateway sandbox id mirrored to status ($sandbox_id)"
+
+  # The claim is provisioned by the operator, not the gateway — that ownership
+  # is what lets it outlive the recreate below.
+  kubectl wait --for=jsonpath='{.status.phase}'=Bound --timeout="$TIMEOUT" \
+    -n "$NAMESPACE" pvc/e2e-sandbox-work >/dev/null
+  pvc_uid="$(field pvc/e2e-sandbox-work '{.metadata.uid}' -n "$NAMESPACE")"
+  ok "operator-provisioned PVC bound"
+
+  # A mutable policy section (networkPolicies) goes to the live sandbox through
+  # UpdateConfig. The sandbox id must survive: recreating here would discard the
+  # running workload for a change the gateway accepts in place.
+  policy_hash="$(field openshellsandbox/e2e-sandbox '{.status.appliedPolicyHash}' -n "$NAMESPACE")"
+  # An empty baseline would turn the `away` below into "wait for any value",
+  # which the very first hash write satisfies without converging anything.
+  [ -n "$policy_hash" ] || fail "sandbox status.appliedPolicyHash is empty while Ready"
+  kubectl patch openshellpolicy e2e-sandbox-policy -n "$NAMESPACE" --type merge -p \
+    '{"spec":{"networkPolicies":{"e2e":{"endpoints":[{"host":"api.e2e.example","port":443}]}}}}' >/dev/null
+  away openshellsandbox/e2e-sandbox '{.status.appliedPolicyHash}' "$policy_hash" -n "$NAMESPACE"
+  ok "policy edit converged in place (appliedPolicyHash moved)"
+  event openshellsandbox/e2e-sandbox PolicyUpdated
+  ok "PolicyUpdated event emitted"
+  [ "$(field openshellsandbox/e2e-sandbox '{.status.sandboxId}' -n "$NAMESPACE")" = "$sandbox_id" ] \
+    || fail "a mutable policy change recreated the sandbox"
+  ok "gateway sandbox kept its id"
+
+  # An immutable field (logLevel) can only converge by recreation. Chosen over
+  # `image` so the recreate does not pull a second multi-gigabyte image.
+  spec_hash="$(field openshellsandbox/e2e-sandbox '{.status.appliedSpecHash}' -n "$NAMESPACE")"
+  [ -n "$spec_hash" ] || fail "sandbox status.appliedSpecHash is empty while Ready"
+  kubectl patch openshellsandbox e2e-sandbox -n "$NAMESPACE" --type merge -p \
+    '{"spec":{"logLevel":"debug"}}' >/dev/null
+  away openshellsandbox/e2e-sandbox '{.status.sandboxId}' "$sandbox_id" -n "$NAMESPACE"
+  ok "immutable field edit recreated the gateway sandbox"
+  event openshellsandbox/e2e-sandbox Recreating
+  ok "Recreating event emitted"
+  away openshellsandbox/e2e-sandbox '{.status.appliedSpecHash}' "$spec_hash" -n "$NAMESPACE"
+  ok "appliedSpecHash tracks the new immutable fingerprint"
+  kubectl wait --for=condition=Ready --timeout="$SANDBOX_TIMEOUT" \
+    -n "$NAMESPACE" openshellsandbox/e2e-sandbox >/dev/null
+  # The condition reports reconcile health; the phase reports the gateway's own
+  # lifecycle. Check both, or a recreate that never produced a running sandbox
+  # would pass on the condition alone.
+  await openshellsandbox/e2e-sandbox '{.status.phase}' Ready -n "$NAMESPACE"
+  ok "recreated sandbox reports Ready and reaches phase Ready"
+
+  # The whole point of operator-owned volumes: same claim object, not a new one
+  # that happens to carry the same name.
+  [ "$(field pvc/e2e-sandbox-work '{.metadata.uid}' -n "$NAMESPACE")" = "$pvc_uid" ] \
+    || fail "the PVC was replaced by the recreate"
+  await pvc/e2e-sandbox-work '{.status.phase}' Bound -n "$NAMESPACE"
+  ok "operator-owned volume survived the recreate"
+
+  # Deletion runs the finalizer, which deletes the gateway sandbox. The default
+  # volumeRetention (Retain) keeps the data behind.
+  kubectl delete openshellsandbox e2e-sandbox -n "$NAMESPACE" \
+    --wait=true --timeout="$SANDBOX_TIMEOUT" >/dev/null
+  ok "sandbox deleted; finalizer cleanup completed"
+  kubectl get pvc e2e-sandbox-work -n "$NAMESPACE" >/dev/null 2>&1 \
+    || fail "PVC removed despite volumeRetention: Retain"
+  ok "PVC retained after deletion"
+}
+
+if [ "$SANDBOX_E2E" = "0" ]; then
+  skip "SANDBOX_E2E=0"
+elif kubectl get crd sandboxes.agents.x-k8s.io >/dev/null 2>&1; then
+  sandbox_checks
+elif [ "$SANDBOX_E2E" = "1" ]; then
+  fail "SANDBOX_E2E=1 but the agents.x-k8s.io Sandbox CRD is absent"
+else
+  skip "no agents.x-k8s.io Sandbox CRD; install agent-sandbox to run this section"
+fi
 
 printf '\n\033[32mAll %d e2e checks passed.\033[0m\n' "$PASSED"

@@ -65,16 +65,17 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
 
-  # Full-stack check: stand up gateway + issuer + operator on kind from the
-  # chart, then drive the control-plane CRDs against a real gateway. This is the
+  # Full-stack check: stand up agent-sandbox, then gateway + issuer + operator on
+  # kind from the chart, and drive every CRD against a real gateway. This is the
   # only job that proves the reconcilers' gateway calls actually work; the rest
-  # test them against a fake. OpenShellSandbox is out of scope (it needs the
-  # agents.x-k8s.io controller and real sandbox pods) — see test/e2e/run.sh.
+  # test them against a fake.
   e2e:
     runs-on: ubuntu-latest
     # Every step inside is individually bounded, but cluster creation and image
-    # pulls are not — this keeps a wedged run from burning the 6h default.
-    timeout-minutes: 30
+    # pulls are not — this keeps a wedged run from burning the 6h default. The
+    # sandbox section pulls a multi-gigabyte sandbox image into the node, so the
+    # bound is well above the job's usual runtime.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -102,6 +103,13 @@ jobs:
           cluster_name: e2e
       - name: Load images into kind
         run: kind load docker-image openshell-operator:e2e openshell-issuer:e2e --name e2e
+      # Cluster-wide prerequisite, not part of the chart: the gateway's compute
+      # driver provisions sandbox pods through agents.x-k8s.io. Installed with
+      # the command the README gives users, so the two stay honest.
+      - name: Install Agent Sandbox
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
+          kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller --timeout=5m
       # The batteries-included posture: one install brings up all three, with the
       # gateway subchart fetched at the version Chart.lock pins. pullPolicy=Never
       # keeps kubelet on the side-loaded images instead of reaching for a registry.
@@ -117,8 +125,10 @@ jobs:
             --set auth.issuer.tag=e2e \
             --set auth.issuer.pullPolicy=Never \
             --wait --timeout 10m
+      # SANDBOX_E2E=1: the sandbox section skips itself where agent-sandbox is
+      # absent, which here would silently drop the checks this job exists for.
       - name: Run e2e checks
-        run: NAMESPACE=openshell-system test/e2e/run.sh
+        run: SANDBOX_E2E=1 NAMESPACE=openshell-system test/e2e/run.sh
       # The script dumps its own diagnostics when an assertion fails; this covers
       # the install failing before it ever runs.
       - name: Cluster state on failure
