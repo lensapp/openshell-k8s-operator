@@ -23,6 +23,20 @@
 {{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
 {{-   fail (printf "replicaCount=%d requires leaderElection.enabled=true: without election every replica reconciles at once. Set replicaCount=1 or enable leader election." (int .Values.replicaCount)) }}
 {{- end }}
+{{- /* A budget no eviction can satisfy wedges every node drain: evicting one pod must still leave minAvailable behind, so the pods it demands have to stay below replicaCount. Covers the single-replica case too (the default 1 >= 1). Percentages round up, exactly as the API server resolves them. */ -}}
+{{- if eq (include "openshell-operator.pdbEnabled" .) "true" }}
+{{-   $minAvailable := .Values.podDisruptionBudget.minAvailable }}
+{{-   $replicas := int .Values.replicaCount }}
+{{-   $required := 0 }}
+{{-   if and (kindIs "string" $minAvailable) (hasSuffix "%" $minAvailable) }}
+{{-     $required = int (ceil (divf (mul (int (trimSuffix "%" $minAvailable)) $replicas) 100)) }}
+{{-   else }}
+{{-     $required = int $minAvailable }}
+{{-   end }}
+{{-   if ge $required $replicas }}
+{{-     fail (printf "podDisruptionBudget.minAvailable=%v with replicaCount=%d blocks every node drain: it demands %d of %d replicas, so no eviction can ever satisfy it. Lower minAvailable, raise replicaCount, or leave podDisruptionBudget.enabled unset to follow replicaCount." $minAvailable $replicas $required $replicas) }}
+{{-   end }}
+{{- end }}
 {{- /* The webhook is served by the operator process, so it needs the operator Deployment. */ -}}
 {{- if and (eq (include "openshell-operator.webhookEnabled" .) "true") (not .Values.operator.deployStandalone) }}
 {{-   fail "exec-confinement webhook requires operator.deployStandalone=true: it is served by the operator process, which a CRDs+RBAC-only install does not run. Set webhook.execConfinement.enabled=false or operator.deployStandalone=true." }}

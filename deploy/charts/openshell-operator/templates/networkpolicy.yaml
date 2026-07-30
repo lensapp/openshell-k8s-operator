@@ -1,0 +1,27 @@
+{{- if and .Values.operator.deployStandalone .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "openshell-operator.selectorLabels" . | nindent 6 }}
+  # Ingress only. Egress is left unrestricted on purpose — see the values file.
+  policyTypes: ["Ingress"]
+  ingress:
+    # Probes arrive from the kubelet on whichever node the pod lands on, and the
+    # webhook from the API server; neither address is knowable at render time.
+    # So the port is the restriction here, not the source.
+    - ports:
+        # Health, matching the container's health port in the Deployment.
+        - port: 8080
+          protocol: TCP
+        {{- if eq (include "openshell-operator.webhookEnabled" .) "true" }}
+        - port: {{ .Values.webhook.execConfinement.port }}
+          protocol: TCP
+        {{- end }}
+{{- end }}

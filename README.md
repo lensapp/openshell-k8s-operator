@@ -38,7 +38,11 @@ By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell ga
 
 **High availability.** Leader election is on by default, so scaling the operator is safe: `--set replicaCount=3` runs three replicas that contend for a `coordination.k8s.io` Lease and let only the holder reconcile while the rest stand by, so a rolling update or node loss fails over cleanly. The container serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080, wired as probes; readiness does not gate on leadership, so standbys report ready and never stall a rollout.
 
-Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`, `crds.install`, `operator.deployStandalone`, `replicaCount`, `leaderElection.enabled`, `webhook.execConfinement.enabled`, `resources`.
+Raising `replicaCount` also brings a `PodDisruptionBudget` (`minAvailable: 1`, so a node drain cannot evict the last available replica) and a soft same-node spread — soft so a cluster with fewer nodes than replicas still schedules them all. Both follow `replicaCount` rather than a separate switch: at a single replica a budget has nothing to order and would only wedge drains, so it is not rendered (and asking for one there is refused at render time). Replace `topologySpreadConstraints` for a strict or zonal spread, and set `priorityClassName` to keep the operator off the eviction list under node pressure.
+
+An ingress-only `NetworkPolicy` for the operator pods is available with `networkPolicy.enabled=true`, restricting reachability to the probe and webhook ports. It is off by default because a policy is silently inert under a CNI that does not enforce them. Egress is left alone on purpose: what the operator dials (API server, gateway, DNS) is cluster-specific, so pair it with your own egress policy.
+
+Key values: `gateway.bundled`, `gateway.endpoint`, `gateway.caSecret`, `auth.mode`, `auth.oidc.*`, `image.repository` / `image.tag`, `logLevel`, `crds.install`, `operator.deployStandalone`, `replicaCount`, `leaderElection.enabled`, `podDisruptionBudget.enabled`, `topologySpreadConstraints`, `priorityClassName`, `networkPolicy.enabled`, `webhook.execConfinement.enabled`, `resources`.
 
 ## Example
 
