@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.4.1...v0.5.0) (2026-07-30)
+
+
+### Features
+
+* add HA and network primitives to the chart ([fa8f8fd](https://github.com/lensapp/openshell-k8s-operator/commit/fa8f8fd2a455410c85104d87c9d8e165dc486aa7))
+
 ## [0.4.1](https://github.com/lensapp/openshell-k8s-operator/compare/v0.4.0...v0.4.1) (2026-07-28)
 
 
