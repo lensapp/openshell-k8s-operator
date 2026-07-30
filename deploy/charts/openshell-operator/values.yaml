@@ -35,6 +35,39 @@ replicaCount: 1
 leaderElection:
   enabled: true
 
+# Disruption budget for the operator replicas. Left unset (null) it follows
+# replicaCount: on above one replica, off at one — where a budget has no second
+# replica to order the drain around and would simply block it. Set true/false to
+# override; true at a single replica is refused, since it wedges every drain.
+podDisruptionBudget:
+  enabled: null
+  minAvailable: 1
+
+# How replicas are spread across the cluster. Rendered only above one replica —
+# a spread over a single pod constrains nothing, so a list set here is ignored
+# there. Empty uses a soft same-node spread (see the Deployment template), which keeps
+# a cluster with fewer nodes than replicas schedulable. Supply your own list of
+# topologySpreadConstraints to replace it — e.g. a strict DoNotSchedule spread,
+# or one keyed on topology.kubernetes.io/zone.
+topologySpreadConstraints: []
+
+# PriorityClass for the operator pods. Empty uses the cluster default. A control
+# plane component usually wants a high-priority class so it is not the first
+# thing evicted under node pressure.
+priorityClassName: ""
+
+# Ingress NetworkPolicy for the operator pods. Off by default: plenty of
+# clusters run a CNI that ignores NetworkPolicy outright, and a policy that
+# looks applied but is not is worse than none at all. When on, only the ports
+# the operator serves are reachable — the probes and, where enabled, the
+# admission webhook.
+#
+# Egress is deliberately left alone. What the operator dials — the API server,
+# the gateway, DNS — is cluster-specific, so any default we shipped would be
+# either wrong or empty. Write your own egress policy alongside this one.
+networkPolicy:
+  enabled: false
+
 gateway:
   # Bundle the OpenShell gateway with this release (the batteries-included
   # default: one helm install brings up gateway + issuer + operator). Set false

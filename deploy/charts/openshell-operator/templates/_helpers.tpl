@@ -151,6 +151,21 @@ explicit true/false wins. Returns the string "true" or "false".
 {{- end -}}
 
 {{/*
+Whether to render a PodDisruptionBudget. Unset (null) follows replicaCount: on
+above one replica, off at one — where a budget can only block a node drain that
+it has no second replica to order. An explicit true/false wins. Returns the
+string "true" or "false".
+*/}}
+{{- define "openshell-operator.pdbEnabled" -}}
+{{- $enabled := .Values.podDisruptionBudget.enabled -}}
+{{- if kindIs "invalid" $enabled -}}
+{{- gt (int .Values.replicaCount) 1 -}}
+{{- else -}}
+{{- $enabled -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 namespaceSelector matchExpressions for the webhooks. Bundled: scope to exactly
 the release namespace (where the bundled gateway places sandboxes) via the
 built-in metadata.name label — no manual labelling. BYO: confine namespaces the

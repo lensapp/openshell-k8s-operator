@@ -1,0 +1,17 @@
+{{- if and .Values.operator.deployStandalone (eq (include "openshell-operator.pdbEnabled" .) "true") -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "openshell-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openshell-operator.labels" . | nindent 4 }}
+spec:
+  # Keeps a lease-holder (or a standby ready to take the lease) through a node
+  # drain: the eviction of the last available replica is refused until another
+  # is back. It orders disruption; it does not prevent it.
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "openshell-operator.selectorLabels" . | nindent 6 }}
+{{- end }}

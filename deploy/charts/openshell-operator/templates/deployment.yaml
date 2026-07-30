@@ -130,6 +130,25 @@ spec:
               readOnly: true
             {{- end }}
           {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- if gt (int .Values.replicaCount) 1 }}
+      topologySpreadConstraints:
+        {{- with .Values.topologySpreadConstraints }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        # Soft by default: replicas prefer separate nodes, but a cluster with
+        # fewer nodes than replicas still schedules all of them rather than
+        # leaving the surplus Pending. Replace the list to make it strict.
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "openshell-operator.selectorLabels" . | nindent 14 }}
+        {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
