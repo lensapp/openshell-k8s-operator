@@ -114,10 +114,10 @@ spec:
                     nullable: true
                     properties:
                       runAsGroup:
-                        description: Group the sandbox process runs as (`sandbox` or a numeric GID).
+                        description: Group the sandbox process runs as (`sandbox` or a numeric GID). Omit to let the compute runtime choose the identity.
                         type: string
                       runAsUser:
-                        description: User the sandbox process runs as (`sandbox` or a numeric UID).
+                        description: User the sandbox process runs as (`sandbox` or a numeric UID). Omit to let the compute runtime choose the identity.
                         type: string
                     type: object
                   version:
@@ -611,10 +611,10 @@ spec:
                 nullable: true
                 properties:
                   runAsGroup:
-                    description: Group the sandbox process runs as (`sandbox` or a numeric GID).
+                    description: Group the sandbox process runs as (`sandbox` or a numeric GID). Omit to let the compute runtime choose the identity.
                     type: string
                   runAsUser:
-                    description: User the sandbox process runs as (`sandbox` or a numeric UID).
+                    description: User the sandbox process runs as (`sandbox` or a numeric UID). Omit to let the compute runtime choose the identity.
                     type: string
                 type: object
               version:
