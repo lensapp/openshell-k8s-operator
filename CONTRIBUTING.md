@@ -75,6 +75,10 @@ cluster that has the chart installed:
 NAMESPACE=openshell-system test/e2e/run.sh
 ```
 
+CI runs it in both postures: the bundled install, and a bring-your-own gateway
+installed as its own release in its own namespace (`GATEWAY_NAMESPACE` points
+the preflight and the diagnostics at it).
+
 The `OpenShellSandbox` section drives a real sandbox pod, so it runs only where
 the [Agent Sandbox](https://agent-sandbox.sigs.k8s.io) controller is installed
 (see the README's prerequisite) and skips itself otherwise. `SANDBOX_E2E=1`
