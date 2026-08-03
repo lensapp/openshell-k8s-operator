@@ -459,11 +459,13 @@ pub struct LandlockPolicy {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessPolicy {
-    /// User the sandbox process runs as (`sandbox` or a numeric UID).
+    /// User the sandbox process runs as (`sandbox` or a numeric UID). Omit to
+    /// let the compute runtime choose the identity.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub run_as_user: String,
 
-    /// Group the sandbox process runs as (`sandbox` or a numeric GID).
+    /// Group the sandbox process runs as (`sandbox` or a numeric GID). Omit to
+    /// let the compute runtime choose the identity.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub run_as_group: String,
 }

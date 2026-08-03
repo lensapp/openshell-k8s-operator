@@ -106,6 +106,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_omitted_process_identity() {
+        // The gateway parser treats empty identity fields as "the compute
+        // runtime decides" — it rejected them before v0.0.96. We emit both keys
+        // unconditionally, so pin the contract we now rely on.
+        let spec = OpenShellPolicySpec {
+            version: 1,
+            process: Some(ProcessPolicy::default()),
+            ..OpenShellPolicySpec::default()
+        };
+
+        let policy = to_proto(&spec).expect("omitted identity is valid");
+        let process = policy.process.expect("process present");
+        assert!(process.run_as_user.is_empty());
+        assert!(process.run_as_group.is_empty());
+    }
+
+    #[test]
     fn passes_network_policies_through_to_parser() {
         let mut network = BTreeMap::new();
         network.insert(
