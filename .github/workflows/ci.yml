@@ -157,6 +157,104 @@ jobs:
           kubectl get events -n openshell-system --sort-by=.lastTimestamp | tail -40
           kubectl describe pods -n openshell-system | tail -120
 
+  # The bring-your-own posture, and the one customers run in production: the
+  # gateway is somebody else's release in its own namespace, and the chart is
+  # pointed at it. Until now only `helm template` covered it, so the wiring the
+  # README prescribes — endpoint, CA secret, and a gateway configured to trust
+  # our issuer — was never actually executed. Its own cluster, because two
+  # releases would fight over the cluster-scoped CRDs and reconcile the same CRs.
+  #
+  # Sandboxes are out of scope here (SANDBOX_E2E=0): the bundled job already
+  # proves that loop, and this one exists to prove the gateway wiring.
+  e2e-byo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: operator
+          tags: openshell-operator:e2e
+          load: true
+          cache-from: type=gha,scope=operator
+          cache-to: type=gha,mode=max,scope=operator
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: issuer
+          tags: openshell-issuer:e2e
+          load: true
+          cache-from: type=gha,scope=issuer
+          cache-to: type=gha,mode=max,scope=issuer
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: e2e-byo
+      - name: Load images into kind
+        run: kind load docker-image openshell-operator:e2e openshell-issuer:e2e --name e2e-byo
+      # The operator release goes in first, and without --wait: the gateway
+      # resolves its OIDC issuer at startup and exits if it cannot reach it, so
+      # the issuer has to be serving before the gateway starts. The operator pod
+      # waits on the CA Secret created two steps below, which is why nothing
+      # waits for it here. fullnameOverride keeps the issuer's Service name
+      # stable, since the gateway install below has to name it as a literal.
+      - name: Install the operator, pointed at a gateway that does not exist yet
+        run: |
+          helm dependency build deploy/charts/openshell-operator
+          kubectl create namespace openshell-system
+          helm install op deploy/charts/openshell-operator \
+            --namespace openshell-system \
+            --set fullnameOverride=openshell-operator \
+            --set gateway.bundled=false \
+            --set gateway.endpoint=https://openshell-gateway.openshell-gateway.svc:8080 \
+            --set gateway.caSecret=gateway-ca \
+            --set image.repository=openshell-operator \
+            --set image.tag=e2e \
+            --set image.pullPolicy=Never \
+            --set auth.issuer.repository=openshell-issuer \
+            --set auth.issuer.tag=e2e \
+            --set auth.issuer.pullPolicy=Never
+          kubectl -n openshell-system rollout status deploy/openshell-operator-issuer --timeout=5m
+      # Installed from the tarball `helm dependency build` just fetched (the
+      # glob assumes the chart's single dependency), so the gateway under test
+      # is the exact release Chart.lock pins — a customer's
+      # own gateway, standing on its own, in its own namespace. The oidc values
+      # are the ones the chart's install notes tell a BYO user to configure.
+      - name: Install a gateway of one's own
+        run: |
+          helm install gateway deploy/charts/openshell-operator/charts/helm-chart-*.tgz \
+            --namespace openshell-gateway --create-namespace \
+            --set fullnameOverride=openshell-gateway \
+            --set server.tls.clientCaSecretName="" \
+            --set server.oidc.issuer=http://openshell-operator-issuer.openshell-system.svc:8081 \
+            --set server.oidc.audience=openshell-operator \
+            --set server.oidc.rolesClaim=roles \
+            --set server.oidc.adminRole=openshell-admin \
+            --set server.oidc.userRole=openshell-user \
+            --wait --timeout 10m
+      # The operator trusts the gateway's server CA through gateway.caSecret. It
+      # carries only ca.crt — the gateway's own Secret holds the serving key too,
+      # which has no business in another namespace.
+      - name: Hand the gateway's CA to the operator
+        run: |
+          kubectl get secret openshell-server-tls -n openshell-gateway \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+          kubectl create secret generic gateway-ca -n openshell-system --from-file=ca.crt=ca.crt
+          kubectl -n openshell-system rollout status deploy/openshell-operator --timeout=5m
+      - name: Run e2e checks
+        run: |
+          SANDBOX_E2E=0 NAMESPACE=openshell-system GATEWAY_NAMESPACE=openshell-gateway \
+            test/e2e/run.sh
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          kubectl get pods,jobs -A
+          kubectl get events -n openshell-system --sort-by=.lastTimestamp | tail -20
+          kubectl get events -n openshell-gateway --sort-by=.lastTimestamp | tail -20
+          kubectl describe pods -n openshell-system | tail -80
+          kubectl logs -n openshell-gateway statefulset/openshell-gateway --tail=80 || true
+
   # Backstop for the commit-msg hook: reject non-Conventional-Commit subjects so
   # release-please always picks up changes. Uses the same shared validator.
   commits:

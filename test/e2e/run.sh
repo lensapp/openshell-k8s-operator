@@ -15,12 +15,19 @@
 # the section outright.
 #
 #   NAMESPACE=openshell-system test/e2e/run.sh
+#
+# A bring-your-own gateway runs in its own namespace; name it so the preflight
+# and the diagnostics look in the right place:
+#
+#   NAMESPACE=openshell-system GATEWAY_NAMESPACE=openshell-gateway test/e2e/run.sh
 
-# -E so the ERR trap reaches inside functions: without it a failed check in
-# `sandbox_checks` would exit with no diagnostics at all.
-set -Eeuo pipefail
+set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-openshell-system}"
+# Where the gateway runs. Defaults to the operator's namespace, which is where
+# the bundled install puts it; a bring-your-own gateway lives wherever its own
+# release does, so the preflight and the diagnostics take it as a knob.
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-$NAMESPACE}"
 # Generous: the gateway is reached over the network and reconciles are requeued
 # on a 15s error cadence, so a single retry must fit inside this.
 TIMEOUT="${TIMEOUT:-90s}"
@@ -48,9 +55,7 @@ skip() { printf '  \033[33mskip\033[0m %s\n' "$*"; }
 # nothing holds their finalizers, and leaving them mid-deletion would make an
 # immediate re-run fail on "object is being deleted".
 cleanup() {
-  # Best-effort deletes: a failure here is not a finding, so it must not drag
-  # the ERR trap in behind a run that otherwise passed.
-  trap - ERR
+  # Best-effort deletes: a failure here is not a finding.
   set +e
   # Sandboxes first: their finalizer deletes the gateway sandbox, and the PVCs
   # they provisioned outlive them by design (volumeRetention: Retain). Those
@@ -75,11 +80,20 @@ diagnose() {
   printf '\n--- operator logs ---\n' >&2
   kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=openshell-operator --tail=80 >&2 2>&1 || true
   printf '\n--- gateway logs ---\n' >&2
-  kubectl logs -n "$NAMESPACE" statefulset/openshell-gateway --tail=40 >&2 2>&1 || true
-  # Cleanup is left to the EXIT trap, which is its single owner.
+  kubectl logs -n "$GATEWAY_NAMESPACE" statefulset/openshell-gateway --tail=40 >&2 2>&1 || true
+  # Cleanup is `finish`'s job, and runs after this returns.
 }
-trap diagnose ERR
-trap cleanup EXIT
+# One trap for the whole exit path: dump diagnostics when the script is on its
+# way out with a failure, then clean up either way. Keyed on the exit status
+# rather than on ERR, because plenty of commands here are *expected* to fail —
+# the patches the CEL rules must reject, the polls that read a resource before
+# it exists — and an ERR trap dumps a scary diagnostic for every one of them.
+finish() {
+  local status=$?
+  [ "$status" -eq 0 ] || diagnose
+  cleanup
+}
+trap finish EXIT
 
 # Poll until `kubectl get -o jsonpath=<path>` on a resource equals <expected>.
 # Used for status fields that are not conditions (phase, reason, resourceVersion).
@@ -130,11 +144,11 @@ field() { # field <resource> <jsonpath> [-n namespace]
 
 ready_reason='{.status.conditions[?(@.type=="Ready")].reason}'
 
-log "Preflight: operator and gateway are up in $NAMESPACE"
+log "Preflight: operator in $NAMESPACE, gateway in $GATEWAY_NAMESPACE"
 kubectl wait --for=condition=Available --timeout="$TIMEOUT" \
   -n "$NAMESPACE" deployment -l app.kubernetes.io/name=openshell-operator >/dev/null
 ok "operator deployment available"
-kubectl rollout status --timeout="$TIMEOUT" -n "$NAMESPACE" statefulset/openshell-gateway >/dev/null
+kubectl rollout status --timeout="$TIMEOUT" -n "$GATEWAY_NAMESPACE" statefulset/openshell-gateway >/dev/null
 ok "gateway statefulset rolled out"
 
 # --------------------------------------------------------------------------
