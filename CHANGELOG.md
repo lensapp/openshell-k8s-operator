@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/lensapp/openshell-k8s-operator/compare/v0.5.1...v0.5.2) (2026-08-04)
+
+
+### Bug Fixes
+
+* bump OpenShell to v0.0.97 ([60eb3f4](https://github.com/lensapp/openshell-k8s-operator/commit/60eb3f4a4716a5117cb85a0de1e5e65d61b0b229))
+
 ## [0.5.1](https://github.com/lensapp/openshell-k8s-operator/compare/v0.5.0...v0.5.1) (2026-08-03)
 
 
