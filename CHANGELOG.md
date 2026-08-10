@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.3](https://github.com/lensapp/openshell-k8s-operator/compare/v0.5.2...v0.5.3) (2026-08-10)
+
+
+### Bug Fixes
+
+* bump OpenShell to v0.0.101 ([85c010a](https://github.com/lensapp/openshell-k8s-operator/commit/85c010adf88b9af39578e80795c888eb5dd43c56))
+* describe the filesystem policy as the allowlist it is ([d58a492](https://github.com/lensapp/openshell-k8s-operator/commit/d58a4921081ca25dc9618250ef42b448ce3bfb04))
+
 ## [0.5.2](https://github.com/lensapp/openshell-k8s-operator/compare/v0.5.1...v0.5.2) (2026-08-04)
 
 
