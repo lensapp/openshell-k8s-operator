@@ -22,7 +22,10 @@ ENTRYPOINT ["/usr/local/bin/openshell-issuer"]
 
 # The operator. Last stage, so a plain `docker build .` yields the operator
 # image. Distroless cc: glibc + CA certificates, no shell or package manager,
-# runs as the built-in nonroot user (uid 65532).
+# runs as the built-in nonroot user (uid 65532). The CA bundle is load-bearing:
+# outbound TLS resolves roots through rustls-native-certs (tonic for the
+# gateway channel, reqwest for HTTP), so a base without the bundle at
+# /etc/ssl/certs/ca-certificates.crt breaks HTTPS.
 FROM gcr.io/distroless/cc-debian12:nonroot AS operator
 COPY --from=builder /openshell-operator /usr/local/bin/openshell-operator
 USER nonroot:nonroot

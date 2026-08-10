@@ -596,6 +596,11 @@ impl Gateway for SdkGateway {
             // profile_workspace that is non-empty and mismatched), so global
             // profiles stay valid for a workspaced provider.
             profile_workspace: String::new(),
+            // Gateway-owned: handles are minted by its credential storage, and
+            // create and update both reject a non-empty map with
+            // `InvalidArgument`. Never round-trip them from the fetched
+            // provider — the gateway keeps the stored handles either way.
+            credential_handles: HashMap::new(),
         };
 
         if existing.is_some() {
