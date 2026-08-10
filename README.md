@@ -74,8 +74,11 @@ metadata:
   name: restricted
 spec:
   filesystem:
+    # A Landlock allowlist, not mount options: once non-empty, anything absent is
+    # denied, including execute. List what the entrypoint needs or it cannot run.
     includeWorkdir: true
-    readOnly: ["/etc"]
+    readOnly: ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"]
+    readWrite: ["/tmp", "/dev/null"]
   process:
     runAsUser: sandbox
   networkPolicies:
@@ -202,6 +205,8 @@ spec:
   policy:
     filesystem:
       includeWorkdir: true
+      readOnly: ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"]
+      readWrite: ["/tmp", "/dev/null"]
     process:
       runAsUser: sandbox
 ```
