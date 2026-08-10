@@ -78,20 +78,20 @@ spec:
                 nullable: true
                 properties:
                   filesystem:
-                    description: Filesystem access policy.
+                    description: 'Filesystem access policy. The `readOnly`/`readWrite` lists are a Landlock allowlist: leave both empty and no filesystem rules apply; make them non-empty and every path outside the list is denied, including execute. A non-empty list must cover everything the entrypoint needs (`/usr`, `/lib`, …) or the sandbox cannot start.'
                     nullable: true
                     properties:
                       includeWorkdir:
                         default: false
-                        description: Mount the sandbox working directory read-write.
+                        description: Add the sandbox working directory to the read-write allowlist. This defaults to `false`, while the gateway's own default policy sets it `true` — so omitting the whole `filesystem` section is not the same as supplying an empty one.
                         type: boolean
                       readOnly:
-                        description: Absolute paths mounted read-only.
+                        description: Absolute paths allowlisted read-only.
                         items:
                           type: string
                         type: array
                       readWrite:
-                        description: Absolute paths mounted read-write.
+                        description: Absolute paths allowlisted read-write.
                         items:
                           type: string
                         type: array
@@ -575,20 +575,20 @@ spec:
               An `OpenShellPolicy` holds no gateway state and is not synced on its own — it is a document that `OpenShellSandbox.spec.policyRef` resolves and applies at sandbox creation (the same schema can also be inlined directly under `OpenShellSandbox.spec.policy`). Note that `filesystem`, `landlock`, and `process` are immutable on a running sandbox, so editing an `OpenShellPolicy` only affects sandboxes created afterwards.
             properties:
               filesystem:
-                description: Filesystem access policy.
+                description: 'Filesystem access policy. The `readOnly`/`readWrite` lists are a Landlock allowlist: leave both empty and no filesystem rules apply; make them non-empty and every path outside the list is denied, including execute. A non-empty list must cover everything the entrypoint needs (`/usr`, `/lib`, …) or the sandbox cannot start.'
                 nullable: true
                 properties:
                   includeWorkdir:
                     default: false
-                    description: Mount the sandbox working directory read-write.
+                    description: Add the sandbox working directory to the read-write allowlist. This defaults to `false`, while the gateway's own default policy sets it `true` — so omitting the whole `filesystem` section is not the same as supplying an empty one.
                     type: boolean
                   readOnly:
-                    description: Absolute paths mounted read-only.
+                    description: Absolute paths allowlisted read-only.
                     items:
                       type: string
                     type: array
                   readWrite:
-                    description: Absolute paths mounted read-write.
+                    description: Absolute paths allowlisted read-write.
                     items:
                       type: string
                     type: array

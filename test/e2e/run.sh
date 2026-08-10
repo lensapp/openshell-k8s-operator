@@ -160,6 +160,9 @@ kind: OpenShellPolicy
 metadata: { name: e2e-policy, namespace: $NAMESPACE, labels: { e2e: "true" } }
 spec:
   version: 1
+  # Validation-only: this asserts the gateway parser accepts the document. The
+  # allowlist is deliberately left incomplete, so do not attach it to a sandbox —
+  # it parses, but it could not exec. See e2e-sandbox-policy for a bootable one.
   filesystem: { includeWorkdir: true, readOnly: ["/etc"] }
 EOF
 kubectl wait --for=condition=Ready --timeout="$TIMEOUT" \
@@ -375,7 +378,13 @@ kind: OpenShellPolicy
 metadata: { name: e2e-sandbox-policy, namespace: $NAMESPACE, labels: { e2e: "true" } }
 spec:
   version: 1
-  filesystem: { includeWorkdir: true }
+  # The filesystem lists are a Landlock allowlist, so this has to name the paths
+  # the entrypoint needs or the sandbox cannot exec. includeWorkdir on its own
+  # allowlists only the workdir, which denies the binary and its loader.
+  filesystem:
+    includeWorkdir: true
+    readOnly: ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"]
+    readWrite: ["/tmp", "/dev/null"]
 ---
 apiVersion: openshell.lenshq.io/v1alpha1
 kind: OpenShellSandbox

@@ -374,7 +374,11 @@ pub struct OpenShellPolicySpec {
     #[serde(default = "default_policy_version")]
     pub version: u32,
 
-    /// Filesystem access policy.
+    /// Filesystem access policy. The `readOnly`/`readWrite` lists are a Landlock
+    /// allowlist: leave both empty and no filesystem rules apply; make them
+    /// non-empty and every path outside the list is denied, including execute. A
+    /// non-empty list must cover everything the entrypoint needs (`/usr`, `/lib`,
+    /// …) or the sandbox cannot start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filesystem: Option<FilesystemPolicy>,
 
@@ -430,18 +434,29 @@ const fn default_policy_version() -> u32 {
 }
 
 /// Filesystem access policy. Mirrors the gateway's `FilesystemPolicy`.
+///
+/// `readOnly` and `readWrite` are a Landlock allowlist, not mount instructions.
+/// When their combined list is empty the gateway applies no Landlock rules at
+/// all; when it is non-empty every path outside the list is denied, including
+/// execute. A policy must therefore list what the entrypoint needs to run —
+/// `/usr` and `/lib` for the binary and its loader at minimum — or the sandbox
+/// cannot start. An allowlist that is non-empty but incomplete is the worst
+/// case: the sandbox fails to exec rather than falling back to no enforcement.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FilesystemPolicy {
-    /// Mount the sandbox working directory read-write.
+    /// Add the sandbox working directory to the read-write allowlist. This
+    /// defaults to `false`, while the gateway's own default policy sets it
+    /// `true` — so omitting the whole `filesystem` section is not the same as
+    /// supplying an empty one.
     #[serde(default)]
     pub include_workdir: bool,
 
-    /// Absolute paths mounted read-only.
+    /// Absolute paths allowlisted read-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_only: Vec<String>,
 
-    /// Absolute paths mounted read-write.
+    /// Absolute paths allowlisted read-write.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_write: Vec<String>,
 }
