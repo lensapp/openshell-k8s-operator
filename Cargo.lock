@@ -1613,8 +1613,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "openshell-core"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.101#8ddd98c3dff62619a3963f99ba1e055b67650e72"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.103#c825b1f8efac457f3ca3c6f9e06fb068e8ce3ecc"
 dependencies = [
+ "async-trait",
  "base64",
  "chrono",
  "glob",
@@ -1691,7 +1692,7 @@ dependencies = [
 [[package]]
 name = "openshell-policy"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.101#8ddd98c3dff62619a3963f99ba1e055b67650e72"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.103#c825b1f8efac457f3ca3c6f9e06fb068e8ce3ecc"
 dependencies = [
  "miette",
  "openshell-core",
@@ -1704,7 +1705,7 @@ dependencies = [
 [[package]]
 name = "openshell-providers"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.101#8ddd98c3dff62619a3963f99ba1e055b67650e72"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.103#c825b1f8efac457f3ca3c6f9e06fb068e8ce3ecc"
 dependencies = [
  "glob",
  "openshell-core",
@@ -1719,7 +1720,7 @@ dependencies = [
 [[package]]
 name = "openshell-sdk"
 version = "0.0.0"
-source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.101#8ddd98c3dff62619a3963f99ba1e055b67650e72"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.0.103#c825b1f8efac457f3ca3c6f9e06fb068e8ce3ecc"
 dependencies = [
  "async-trait",
  "futures",
