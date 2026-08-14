@@ -768,7 +768,9 @@ async fn patch_status(
 /// quickly to keep `.status.phase` fresh. (`Deleting` never reaches here; the
 /// cleanup path returns `await_change`.)
 fn success_requeue(phase: Phase) -> Duration {
-    if phase == Phase::Ready {
+    // Ready and Stopped are both resting states: nothing changes until someone
+    // acts, so polling them fast would only add gateway calls.
+    if matches!(phase, Phase::Ready | Phase::Stopped) {
         REQUEUE_INTERVAL
     } else {
         TRANSITIONAL_REQUEUE_INTERVAL
@@ -781,8 +783,11 @@ fn map_phase(phase: SandboxPhase) -> Phase {
         SandboxPhase::Ready => Phase::Ready,
         SandboxPhase::Error => Phase::Error,
         SandboxPhase::Deleting => Phase::Deleting,
-        // Provisioning, Unspecified, Unknown, and any future variant read as
-        // still-settling.
+        SandboxPhase::Stopped => Phase::Stopped,
+        // Provisioning, Stopping, Starting, Unspecified, and Unknown are all
+        // settling, so the catch-all reads them as Provisioning. A future
+        // variant that rests instead of settling needs its own arm, or it gets
+        // reported as Provisioning for as long as it lasts.
         _ => Phase::Provisioning,
     }
 }
@@ -1111,14 +1116,22 @@ mod tests {
         assert_eq!(map_phase(SandboxPhase::Error), Phase::Error);
         assert_eq!(map_phase(SandboxPhase::Deleting), Phase::Deleting);
         assert_eq!(map_phase(SandboxPhase::Provisioning), Phase::Provisioning);
+        assert_eq!(map_phase(SandboxPhase::Stopped), Phase::Stopped);
         // Unspecified/unknown settle as provisioning.
         assert_eq!(map_phase(SandboxPhase::Unspecified), Phase::Provisioning);
+        // Stopping and Starting are on the way somewhere, so they settle as
+        // provisioning. Stopped is the resting state and maps on its own.
+        assert_eq!(map_phase(SandboxPhase::Stopping), Phase::Provisioning);
+        assert_eq!(map_phase(SandboxPhase::Starting), Phase::Provisioning);
     }
 
     #[test]
-    fn success_requeue_polls_faster_until_ready() {
+    fn success_requeue_polls_faster_while_settling() {
         // Ready is steady → drift cadence.
         assert_eq!(success_requeue(Phase::Ready), REQUEUE_INTERVAL);
+        // Stopped rests until someone starts it, so it takes the same cadence.
+        // A short poll here would call the gateway every 10s for good.
+        assert_eq!(success_requeue(Phase::Stopped), REQUEUE_INTERVAL);
         // Still-changeable phases → short poll so `.status.phase` catches up
         // quickly. Error is included: the gateway can recover Error → Ready.
         assert_eq!(

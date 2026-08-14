@@ -375,12 +375,13 @@ spec:
                 nullable: true
                 type: integer
               phase:
-                description: Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`, which reports the operator's own reconcile outcome).
+                description: Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`, which reports the operator's own reconcile outcome). `Stopped` reports a sandbox stopped through the gateway, outside this resource; the operator mirrors that state and does not start it again.
                 enum:
                 - Provisioning
                 - Ready
                 - Error
                 - Deleting
+                - Stopped
                 nullable: true
                 type: string
               sandboxId:
