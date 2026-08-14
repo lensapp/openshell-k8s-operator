@@ -219,7 +219,9 @@ pub struct OpenShellSandboxStatus {
     pub conditions: Vec<Condition>,
 
     /// Coarse lifecycle phase mirrored from the gateway (distinct from `Ready`,
-    /// which reports the operator's own reconcile outcome).
+    /// which reports the operator's own reconcile outcome). `Stopped` reports a
+    /// sandbox stopped through the gateway, outside this resource; the operator
+    /// mirrors that state and does not start it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<Phase>,
 
@@ -255,6 +257,11 @@ pub enum Phase {
     Error,
     /// Sandbox is being torn down.
     Deleting,
+    /// Sandbox is stopped on the gateway and keeps its persistent state. This
+    /// is a resting state, not a step towards `Ready`: only a start brings it
+    /// back. The operator never stops a sandbox itself — it reports what the
+    /// gateway shows, so this phase means someone stopped it out of band.
+    Stopped,
 }
 
 /// Desired state for an OpenShell credential provider.
