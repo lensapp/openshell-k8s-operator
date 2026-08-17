@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.5.4...v0.6.0) (2026-08-17)
+
+
+### Features
+
+* report a stopped sandbox as Stopped ([3fecb95](https://github.com/lensapp/openshell-k8s-operator/commit/3fecb95c298fff174a1d3e60f4786d8ef5b5ecd5))
+
+
+### Bug Fixes
+
+* bump OpenShell to v0.0.105 ([9641869](https://github.com/lensapp/openshell-k8s-operator/commit/9641869da7370fa2e1e17964df49831a28dcfbca))
+
 ## [0.5.4](https://github.com/lensapp/openshell-k8s-operator/compare/v0.5.3...v0.5.4) (2026-08-11)
 
 
