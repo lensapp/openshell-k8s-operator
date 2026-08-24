@@ -1066,6 +1066,12 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
             policy,
             providers,
             resource_requirements,
+            // Spelled out rather than `..default()` so a future proto field
+            // fails the build here and gets re-checked. The CRD models neither
+            // field: an empty command normalizes to the gateway's portable
+            // scratch login shell, and tty stays off.
+            command: Vec::new(),
+            tty: false,
         }),
         name,
         labels: HashMap::new(),
