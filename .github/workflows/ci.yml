@@ -193,6 +193,13 @@ jobs:
           cluster_name: e2e-byo
       - name: Load images into kind
         run: kind load docker-image openshell-operator:e2e openshell-issuer:e2e --name e2e-byo
+      # Same cluster-wide prerequisite as the bundled e2e job: the gateway's
+      # compute driver resolves agents.x-k8s.io at startup and exits if no
+      # supported API version is present. A BYO gateway needs it just as much.
+      - name: Install Agent Sandbox
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
+          kubectl -n agent-sandbox-system rollout status deploy/agent-sandbox-controller --timeout=5m
       # The operator release goes in first, and without --wait: the gateway
       # resolves its OIDC issuer at startup and exits if it cannot reach it, so
       # the issuer has to be serving before the gateway starts. The operator pod
