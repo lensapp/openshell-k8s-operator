@@ -199,8 +199,13 @@ spec:
       env_vars: ["E2E_API_KEY"]
       required: true
   endpoints:
+    # v0.0.111 rejects a credentialed endpoint that is L4-only or `tls: skip`
+    # unless it opts out with allow_uninspected_credentials. Give it real L7
+    # inspection instead.
     - host: api.e2e.example
       port: 443
+      protocol: rest
+      access: read-write
 EOF
 kubectl wait --for=condition=Ready --timeout="$TIMEOUT" openshellproviderprofile/e2e-profile >/dev/null
 ok "profile imported and reports Ready"
