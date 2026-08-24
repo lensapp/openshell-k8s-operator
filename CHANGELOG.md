@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/lensapp/openshell-k8s-operator/compare/v0.6.1...v0.6.2) (2026-08-24)
+
+
+### Bug Fixes
+
+* bump OpenShell to v0.0.111 ([b5c9a0b](https://github.com/lensapp/openshell-k8s-operator/commit/b5c9a0b338e75d344139b5ef6623ce9b3010eb4e))
+* repair e2e for v0.0.111 and install Agent Sandbox for BYO ([9a97736](https://github.com/lensapp/openshell-k8s-operator/commit/9a97736146a9354b4d0b41e7e0266b62151dd70f))
+
 ## [0.6.1](https://github.com/lensapp/openshell-k8s-operator/compare/v0.6.0...v0.6.1) (2026-08-20)
 
 
