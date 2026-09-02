@@ -28,44 +28,50 @@ jobs:
 
   helm:
     runs-on: ubuntu-latest
+    # Offline renders cannot discover cluster APIs, so the bundled gateway's
+    # Agent Sandbox preflight aborts every template. Declare the API it looks
+    # for, or the guard renders below fail for the wrong reason.
+    env:
+      RENDER: helm template test deploy/charts/openshell-operator --api-versions agents.x-k8s.io/v1beta1
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       # Fetch the gateway subchart at the version + digest Chart.lock pins.
       - run: helm dependency build deploy/charts/openshell-operator
-      - run: helm lint deploy/charts/openshell-operator
+      # helm lint has no --api-versions, so skip the preflight outright here.
+      - run: helm lint deploy/charts/openshell-operator --set openshellGateway.agentSandbox.preflight.enabled=false
       # Render every posture: bundled default (gateway + issuer + operator), BYO
       # gateway, BYO gateway + byo token, and CRDs+RBAC-only.
-      - run: helm template test deploy/charts/openshell-operator
-      - run: helm template test deploy/charts/openshell-operator --set gateway.bundled=false --set gateway.endpoint=http://gw:8080
-      - run: helm template test deploy/charts/openshell-operator --set gateway.bundled=false --set gateway.endpoint=http://gw:8080 --set auth.mode=byo
-      - run: helm template test deploy/charts/openshell-operator --set gateway.bundled=false --set operator.deployStandalone=false
+      - run: $RENDER
+      - run: $RENDER --set gateway.bundled=false --set gateway.endpoint=http://gw:8080
+      - run: $RENDER --set gateway.bundled=false --set gateway.endpoint=http://gw:8080 --set auth.mode=byo
+      - run: $RENDER --set gateway.bundled=false --set operator.deployStandalone=false
       # HA: multiple replicas render only with leader election on, and bring the
       # disruption budget and the node spread with them.
-      - run: helm template test deploy/charts/openshell-operator --set replicaCount=3
+      - run: $RENDER --set replicaCount=3
       - name: HA posture renders a PDB and a spread
         run: |
-          helm template test deploy/charts/openshell-operator --set replicaCount=3 \
+          $RENDER --set replicaCount=3 \
             | grep -q 'kind: PodDisruptionBudget'
-          helm template test deploy/charts/openshell-operator --set replicaCount=3 \
+          $RENDER --set replicaCount=3 \
             | grep -q 'topologySpreadConstraints'
       # ...and a single replica brings neither, where a budget would only wedge
       # node drains.
       - name: Single replica renders no PDB
-        run: "! helm template test deploy/charts/openshell-operator | grep -q 'kind: PodDisruptionBudget'"
-      - run: helm template test deploy/charts/openshell-operator --set networkPolicy.enabled=true
+        run: "! $RENDER | grep -q 'kind: PodDisruptionBudget'"
+      - run: $RENDER --set networkPolicy.enabled=true
       # Guards must fail the render: bundled + byo, bundled + no operator,
       # multiple replicas without leader election, and a budget over one replica.
-      - run: "! helm template test deploy/charts/openshell-operator --set auth.mode=byo"
-      - run: "! helm template test deploy/charts/openshell-operator --set operator.deployStandalone=false"
-      - run: "! helm template test deploy/charts/openshell-operator --set replicaCount=3 --set leaderElection.enabled=false"
-      - run: "! helm template test deploy/charts/openshell-operator --set podDisruptionBudget.enabled=true"
-      - run: "! helm template test deploy/charts/openshell-operator --set replicaCount=2 --set podDisruptionBudget.minAvailable=2"
+      - run: "! $RENDER --set auth.mode=byo"
+      - run: "! $RENDER --set operator.deployStandalone=false"
+      - run: "! $RENDER --set replicaCount=3 --set leaderElection.enabled=false"
+      - run: "! $RENDER --set podDisruptionBudget.enabled=true"
+      - run: "! $RENDER --set replicaCount=2 --set podDisruptionBudget.minAvailable=2"
       # Percentages resolve the way the API server resolves them, rounding up.
-      - run: "! helm template test deploy/charts/openshell-operator --set replicaCount=3 --set podDisruptionBudget.minAvailable=100%"
-      - run: helm template test deploy/charts/openshell-operator --set replicaCount=3 --set podDisruptionBudget.minAvailable=50%
+      - run: "! $RENDER --set replicaCount=3 --set podDisruptionBudget.minAvailable=100%"
+      - run: $RENDER --set replicaCount=3 --set podDisruptionBudget.minAvailable=50%
       # A quoted count is a count, not a percentage.
-      - run: "! helm template test deploy/charts/openshell-operator --set replicaCount=3 --set-string podDisruptionBudget.minAvailable=3"
+      - run: "! $RENDER --set replicaCount=3 --set-string podDisruptionBudget.minAvailable=3"
 
   docker:
     runs-on: ubuntu-latest
