@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/lensapp/openshell-k8s-operator/compare/v0.6.3...v0.7.0) (2026-09-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* a bring-your-own gateway must copy the issuer CA ConfigMap into its namespace, set server.oidc.caConfigMapName, use the https issuer URL, and set server.drivers.kubernetes.allowDriverConfig for sandbox volumes. Rust 1.94 is required to build.
+
+### Bug Fixes
+
+* bump OpenShell to v0.1.2 ([948f0b3](https://github.com/lensapp/openshell-k8s-operator/commit/948f0b3de42e277b2553df134b01e50fc4420330))
+
 ## [0.6.3](https://github.com/lensapp/openshell-k8s-operator/compare/v0.6.2...v0.6.3) (2026-09-02)
 
 
