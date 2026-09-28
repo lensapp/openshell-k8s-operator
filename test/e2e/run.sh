@@ -199,7 +199,7 @@ spec:
       env_vars: ["E2E_API_KEY"]
       required: true
   endpoints:
-    # v0.0.111 rejects a credentialed endpoint that is L4-only or `tls: skip`
+    # v0.0.111 rejects a credentialed endpoint that is L4-only or "tls: skip"
     # unless it opts out with allow_uninspected_credentials. Give it real L7
     # inspection instead.
     - host: api.e2e.example
@@ -335,15 +335,34 @@ ok "gateway phase mirrored as Active"
 # A provider joining the workspace must block its deletion: the gateway marks a
 # workspace terminating before checking for blockers, with no undelete.
 #
-# Uses the gateway's built-in `claude-code` profile rather than e2e-profile,
-# which the reference-guard check above has already deleted. If a gateway bump
-# ever renames that built-in, this is the line that fails.
+# Needs its own profile: the reference-guard check above already deleted
+# e2e-profile, and since v0.1 the gateway ships no built-in profiles.
+kubectl apply -f - >/dev/null <<EOF
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellProviderProfile
+metadata: { name: e2e-profile-ws, labels: { e2e: "true" } }
+spec:
+  displayName: E2E Workspace Profile
+  category: inference
+  inferenceCapable: true
+  credentials:
+    - name: api_key
+      env_vars: ["E2E_API_KEY"]
+      required: true
+  endpoints:
+    - host: api.e2e.example
+      port: 443
+      protocol: rest
+      access: read-write
+EOF
+kubectl wait --for=condition=Ready --timeout="$TIMEOUT" openshellproviderprofile/e2e-profile-ws >/dev/null
+
 kubectl apply -f - >/dev/null <<EOF
 apiVersion: openshell.lenshq.io/v1alpha1
 kind: OpenShellProvider
 metadata: { name: e2e-provider-ws, namespace: $NAMESPACE, labels: { e2e: "true" } }
 spec:
-  type: claude-code
+  type: e2e-profile-ws
   workspace: e2ews
   credentialsSecretRef: { name: e2e-creds }
 EOF

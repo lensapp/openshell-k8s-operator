@@ -106,7 +106,9 @@ auth:
   # values your gateway must be configured with.
   oidc:
     # Public issuer URL the gateway discovers. Empty defaults to the in-cluster
-    # Service DNS of the bundled serve pod (http is accepted by the gateway).
+    # Service DNS of the bundled serve pod, over HTTPS (the gateway rejects a
+    # plain-HTTP issuer). The serving cert is signed by a private CA the mint
+    # Job publishes; the gateway must trust that CA.
     issuerUrl: ""
     audience: openshell-operator
     adminRole: openshell-admin
@@ -232,9 +234,17 @@ openshellGateway:
       clientCaSecretName: ""
     # Trust the bundled issuer. issuer/audience/rolesClaim/adminRole mirror the
     # operator's auth.oidc.* — keep them identical if you override either side.
+    # caConfigMapName is the issuer CA the mint Job publishes.
     oidc:
-      issuer: http://openshell-issuer:8081
+      issuer: https://openshell-issuer:8081
+      caConfigMapName: openshell-issuer-ca
       audience: openshell-operator
       rolesClaim: roles
       adminRole: openshell-admin
       userRole: openshell-user
+    # Sandbox volumes reach the gateway as caller driver config, which it
+    # rejects unless enabled. Resource admission stays on: the operator labels
+    # each PVC it provisions as attachable to the sandbox's workspace.
+    drivers:
+      kubernetes:
+        allowDriverConfig: true

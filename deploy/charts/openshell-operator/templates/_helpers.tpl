@@ -85,18 +85,38 @@ subchart values); BYO mode uses the release-scoped name.
 {{- end -}}
 
 {{/*
-Public issuer URL the gateway discovers (http is accepted — the issuer serves
-only public JWKS, no cert needed). Bundled mode uses the fixed same-namespace
-short DNS that matches the gateway subchart's oidc.issuer literal; BYO mode uses
-the release-scoped Service FQDN. An explicit auth.oidc.issuerUrl wins.
+Secret holding the issuer's TLS serving cert (tls.crt, tls.key, ca.crt).
+*/}}
+{{- define "openshell-operator.issuerTlsSecretName" -}}
+{{- printf "%s-issuer-tls" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+
+{{/*
+ConfigMap with the issuer CA plus system roots (key ca.crt) the gateway trusts.
+Bundled mode uses a fixed name so the gateway subchart's oidc.caConfigMapName
+can be a static literal; BYO mode uses the release-scoped name.
+*/}}
+{{- define "openshell-operator.issuerCaConfigMapName" -}}
+{{- if .Values.gateway.bundled -}}
+{{- "openshell-issuer-ca" -}}
+{{- else -}}
+{{- printf "%s-issuer-ca" (include "openshell-operator.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Public issuer URL the gateway discovers. HTTPS: the gateway rejects a
+plain-HTTP issuer. Bundled mode uses the fixed same-namespace short DNS that
+matches the gateway subchart's oidc.issuer literal; BYO mode uses the
+release-scoped Service FQDN. An explicit auth.oidc.issuerUrl wins.
 */}}
 {{- define "openshell-operator.issuerUrl" -}}
 {{- if .Values.auth.oidc.issuerUrl -}}
 {{- .Values.auth.oidc.issuerUrl -}}
 {{- else if .Values.gateway.bundled -}}
-{{- "http://openshell-issuer:8081" -}}
+{{- "https://openshell-issuer:8081" -}}
 {{- else -}}
-{{- printf "http://%s.%s.svc:8081" (include "openshell-operator.issuerServiceName" .) .Release.Namespace -}}
+{{- printf "https://%s.%s.svc:8081" (include "openshell-operator.issuerServiceName" .) .Release.Namespace -}}
 {{- end -}}
 {{- end -}}
 

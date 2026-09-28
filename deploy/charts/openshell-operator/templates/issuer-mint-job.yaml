@@ -1,8 +1,9 @@
 {{- if and .Values.operator.deployStandalone (eq .Values.auth.mode "bundledOidc") -}}
 # One-shot pre-install/upgrade hook: generate the signing key, mint the
 # operator's admin bearer into the token Secret, and publish the public JWKS +
-# discovery doc into a ConfigMap. Idempotent — on upgrade an existing token is
-# left untouched, so the key stays stable and live bearers keep verifying.
+# discovery doc into a ConfigMap. Also creates the issuer's TLS serving cert and
+# publishes its CA for the gateway. Idempotent — on upgrade a token minted for
+# the current issuer URL is left untouched, so live bearers keep verifying.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -49,6 +50,12 @@ spec:
               value: {{ include "openshell-operator.jwksConfigMapName" . | quote }}
             - name: ISSUER_TOKEN_TTL_DAYS
               value: {{ .Values.auth.oidc.tokenTtlDays | quote }}
+            - name: ISSUER_SERVICE
+              value: {{ include "openshell-operator.issuerServiceName" . | quote }}
+            - name: ISSUER_TLS_SECRET
+              value: {{ include "openshell-operator.issuerTlsSecretName" . | quote }}
+            - name: ISSUER_CA_CONFIGMAP
+              value: {{ include "openshell-operator.issuerCaConfigMapName" . | quote }}
             - name: RUST_LOG
               value: {{ .Values.logLevel | quote }}
           securityContext:

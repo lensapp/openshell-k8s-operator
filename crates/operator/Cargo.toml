@@ -5,7 +5,7 @@
 name = "openshell-operator"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.94"
 license = "Apache-2.0"
 description = "Kubernetes operator providing declarative CRDs over the OpenShell gateway"
 repository = "https://github.com/lensapp/openshell-k8s-operator"
@@ -38,9 +38,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
 # Serves the liveness/readiness probe endpoints.
 axum = "0.8"
-# TLS serving for the admission webhook. `no-provider` keeps us on the `ring`
-# crypto provider already pulled in by the kube/rustls stack, rather than
-# dragging in a second one (aws-lc-rs) via rustls' default features.
+# TLS serving for the admission webhook, on the `ring` crypto provider. The
+# OpenShell crates also compile in aws-lc-rs, so `main` installs ring as the
+# process default.
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # Self-signed CA + serving cert for the webhook, generated at startup.
@@ -59,14 +59,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # OpenShell gateway client + shared types, reused as pinned git deps.
 # Pinned to an exact release tag; bump deliberately (treat the gRPC proto as an
 # external contract — re-check after any bump).
-openshell-sdk = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.116" }
-openshell-core = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.116" }
+openshell-sdk = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.1.2" }
+openshell-core = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.1.2" }
 # Canonical policy schema parser/validator; the single source of truth for
 # translating policy documents into the proto `SandboxPolicy`.
-openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.116" }
+openshell-policy = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.1.2" }
 # Canonical provider-profile schema parser/validator; the single source of truth
 # for translating profile documents into the proto `ProviderProfile`.
-openshell-providers = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.0.116" }
+openshell-providers = { git = "https://github.com/NVIDIA/OpenShell", tag = "v0.1.2" }
 
 # `ServiceExt::oneshot` drives the health router in tests without a socket.
 [dev-dependencies]

@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.90"
+          toolchain: "1.94"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
@@ -229,6 +229,14 @@ jobs:
             --set auth.issuer.tag=e2e \
             --set auth.issuer.pullPolicy=Never
           kubectl -n openshell-system rollout status deploy/openshell-operator-issuer --timeout=5m
+      # The gateway trusts the issuer's private CA from a ConfigMap, and a pod
+      # can only mount one from its own namespace, so copy it across.
+      - name: Hand the issuer's CA to the gateway
+        run: |
+          kubectl get configmap openshell-operator-issuer-ca -n openshell-system \
+            -o jsonpath='{.data.ca\.crt}' > issuer-ca.crt
+          kubectl create namespace openshell-gateway
+          kubectl create configmap issuer-ca -n openshell-gateway --from-file=ca.crt=issuer-ca.crt
       # Installed from the tarball `helm dependency build` just fetched (the
       # glob assumes the chart's single dependency), so the gateway under test
       # is the exact release Chart.lock pins — a customer's
@@ -237,14 +245,16 @@ jobs:
       - name: Install a gateway of one's own
         run: |
           helm install gateway deploy/charts/openshell-operator/charts/helm-chart-*.tgz \
-            --namespace openshell-gateway --create-namespace \
+            --namespace openshell-gateway \
             --set fullnameOverride=openshell-gateway \
             --set server.tls.clientCaSecretName="" \
-            --set server.oidc.issuer=http://openshell-operator-issuer.openshell-system.svc:8081 \
+            --set server.oidc.issuer=https://openshell-operator-issuer.openshell-system.svc:8081 \
+            --set server.oidc.caConfigMapName=issuer-ca \
             --set server.oidc.audience=openshell-operator \
             --set server.oidc.rolesClaim=roles \
             --set server.oidc.adminRole=openshell-admin \
             --set server.oidc.userRole=openshell-user \
+            --set server.drivers.kubernetes.allowDriverConfig=true \
             --wait --timeout 10m
       # The operator trusts the gateway's server CA through gateway.caSecret. It
       # carries only ca.crt — the gateway's own Secret holds the serving key too,

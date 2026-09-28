@@ -36,10 +36,11 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
   # Sandbox volumes are provisioned as PersistentVolumeClaims: get_opt (get) +
-  # create on reconcile, delete_collection (deletecollection) on cleanup.
+  # create on reconcile, patch to add missing gateway admission labels,
+  # delete_collection (deletecollection) on cleanup.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "create", "deletecollection"]
+    verbs: ["get", "create", "patch", "deletecollection"]
   # Reconcile outcomes are surfaced as Events (kube-rs publishes events.k8s.io/v1).
   - apiGroups: ["events.k8s.io"]
     resources: ["events"]

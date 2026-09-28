@@ -153,14 +153,9 @@ pub struct Prepared {
 ///
 /// # Errors
 ///
-/// Returns an error if the crypto provider, cert issuance/persistence, caBundle
-/// injection, listen-address parse, or TLS setup fails.
+/// Returns an error if cert issuance/persistence, caBundle injection,
+/// listen-address parse, or TLS setup fails.
 pub async fn bootstrap(kube: Client, config: Config) -> anyhow::Result<Prepared> {
-    // Pin the process crypto provider to `ring` (already in the TLS stack).
-    // Idempotent across replicas of this process and harmless if a dependency
-    // installed it first.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
     let bundle = ensure_cert(&kube, &config).await?;
     inject_ca(&kube, &config, &bundle.ca).await?;
 

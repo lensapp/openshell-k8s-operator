@@ -32,7 +32,7 @@ helm install openshell deploy/charts/openshell-operator \
 
 By default (`gateway.bundled=true`) the chart pulls in the upstream OpenShell gateway as a subchart, stands up a small static OIDC issuer that mints the operator's admin bearer, and points the operator at the gateway over TLS — no external gateway, IdP, or manual config. The bundled gateway self-signs its TLS (no cert-manager), uses an ephemeral SQLite store, and takes a fixed in-cluster identity, so it's meant for one release per namespace and for dev/demo rather than production.
 
-**Bring your own gateway** with `--set gateway.bundled=false --set gateway.endpoint=https://your-gateway:8080`. The chart then installs just the operator (and, by default, the issuer), and the install notes print the `issuer`/`audience`/`admin_role` values to configure your gateway to trust the issuer. Or set `auth.mode=byo` to mount your own token Secret (`auth.byo.tokenSecret`) instead of the bundled issuer. See [`docs/operator-auth.md`](docs/operator-auth.md) for the design.
+**Bring your own gateway** with `--set gateway.bundled=false --set gateway.endpoint=https://your-gateway:8080`. The chart then installs just the operator (and, by default, the issuer), and the install notes print the `issuer`/`audience`/`admin_role` values to configure your gateway to trust the issuer. The issuer serves HTTPS with a private CA, published in a ConfigMap; copy it into your gateway's namespace and set the gateway chart's `server.oidc.caConfigMapName` to it. For sandbox volumes, also set `server.drivers.kubernetes.allowDriverConfig=true`. Or set `auth.mode=byo` to mount your own token Secret (`auth.byo.tokenSecret`) instead of the bundled issuer. See [`docs/operator-auth.md`](docs/operator-auth.md) for the design.
 
 `operator.deployStandalone=false` installs only the CRDs and RBAC (for embedding the operator container elsewhere; pair with `gateway.bundled=false`).
 
@@ -64,7 +64,7 @@ kind: OpenShellProvider
 metadata:
   name: anthropic
 spec:
-  type: claude-code   # a gateway provider-profile id (exact, not an alias)
+  type: claude-code   # an imported gateway provider-profile id (exact, not an alias)
   credentialsSecretRef:
     name: anthropic-credentials   # keys: [] reads all keys
 ---
@@ -101,7 +101,7 @@ spec:
   gpu: false
   gpuCount: 1             # GPUs to request when gpu is true (ignored otherwise)
   logLevel: info          # sandbox-runtime log level
-  runtimeClassName: gvisor   # RuntimeClass requested from the compute platform
+  runtimeClassName: gvisor   # RuntimeClass requested from the compute platform; must carry the label openshell.ai/sandbox-attachable: "true"
   resources:              # cpu/memory for the sandbox pod (Kubernetes quantities)
     requests:
       cpu: "500m"
@@ -240,7 +240,7 @@ Deletion is guarded by a finalizer. Because the gateway marks a workspace termin
 
 ### Provider profiles
 
-A provider *profile* is a provider **type** definition — the schema and template an `OpenShellProvider` is an instance of. The gateway ships built-in profiles for the well-known types (`claude`, `gitlab`, …); `OpenShellProviderProfile` lets a platform admin register a custom one declaratively. It is **cluster-scoped** and imported at the gateway's **platform** scope, so it is shared across every workspace — `metadata.name` *is* the profile id (lowercase kebab-case). Workspace-scoped profiles are deferred to a later revision.
+A provider *profile* is a provider **type** definition — the schema and template an `OpenShellProvider` is an instance of. Since OpenShell v0.1 the gateway ships no built-in profiles: its catalog holds exactly what was imported. Upstream keeps reviewable examples in its [`providers/`](https://github.com/NVIDIA/OpenShell/tree/main/providers) directory (`claude-code`, `github`, …). `OpenShellProviderProfile` lets a platform admin import one declaratively, so an `OpenShellProvider` of that `type` can sync. It is **cluster-scoped** and imported at the gateway's **platform** scope, so it is shared across every workspace — `metadata.name` *is* the profile id (lowercase kebab-case). Workspace-scoped profiles are deferred to a later revision.
 
 ```yaml
 apiVersion: openshell.lenshq.io/v1alpha1
@@ -269,6 +269,8 @@ Deletion is guarded by a finalizer: the operator refuses to delete a profile whi
 `spec.volumes` gives a sandbox durable storage. For each entry the operator provisions a `PersistentVolumeClaim` (named `<sandbox>-<volume>`) from the embedded `claim` — the standard Kubernetes `PersistentVolumeClaimSpec`, so `storageClassName`, `accessModes`, `resources`, and `dataSource` (restore from a VolumeSnapshot or clone an existing PVC) are all available — and mounts it into the sandbox at `mountPath`.
 
 The `OpenShellSandbox` owns the PVC, **not** the gateway sandbox underneath it. That is the point: the gateway treats a sandbox's image, policy, and other fields as immutable, so changing them means deleting and re-creating the sandbox — and because the PVC is anchored to the resource rather than the disposable sandbox, its data survives that recreation. Mounting a volume under `/sandbox` hands OpenShell's workspace persistence to it; mount elsewhere (e.g. `/data`, as above) to keep durable storage alongside the image-seeded workspace.
+
+The gateway attaches a PVC only when it carries its resource-admission labels, `openshell.ai/sandbox-attachable: "true"` and `openshell.ai/sandbox-attachable-workspace: <workspace>`. The operator sets both on the PVCs it provisions, and adds them to an older PVC that lacks them. The volumes reach the gateway as caller driver config, which the gateway rejects unless `server.drivers.kubernetes.allowDriverConfig` is `true`. The bundled gateway sets it; set it on your own gateway too.
 
 `volumeRetention` governs what happens to the PVCs when the `OpenShellSandbox` itself is deleted: `Retain` (default) keeps them so the data outlives the resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox mounts a filesystem.
 

@@ -15,6 +15,10 @@
 {{-   if ne $gw.audience .Values.auth.oidc.audience }}
 {{-     fail (printf "openshellGateway.server.oidc.audience (%s) must match auth.oidc.audience (%s); override both together." $gw.audience .Values.auth.oidc.audience) }}
 {{-   end }}
+{{-   $ca := include "openshell-operator.issuerCaConfigMapName" . }}
+{{-   if ne $gw.caConfigMapName $ca }}
+{{-     fail (printf "openshellGateway.server.oidc.caConfigMapName (%s) must match the bundled issuer CA ConfigMap (%s); the gateway needs it to trust the issuer's TLS cert." $gw.caConfigMapName $ca) }}
+{{-   end }}
 {{-   if ne $gw.adminRole .Values.auth.oidc.adminRole }}
 {{-     fail (printf "openshellGateway.server.oidc.adminRole (%s) must match auth.oidc.adminRole (%s); override both together." $gw.adminRole .Values.auth.oidc.adminRole) }}
 {{-   end }}

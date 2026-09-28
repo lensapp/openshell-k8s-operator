@@ -12,7 +12,7 @@
 //! A finalizer guarantees gateway-side cleanup on delete, and gateway state is
 //! mirrored back into `.status`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -249,7 +249,7 @@ async fn converge(
     sandbox: &OpenShellSandbox,
 ) -> Result<Converged> {
     volumes::validate(&sandbox.spec.volumes)?;
-    ensure_pvcs(ctx, namespace, name, &sandbox.spec.volumes).await?;
+    ensure_pvcs(ctx, namespace, name, &sandbox.spec).await?;
 
     let prior_spec_hash = sandbox
         .status
@@ -683,28 +683,47 @@ fn resources_json(resources: Option<&SandboxResources>) -> Option<serde_json::Va
     serde_json::to_value(resources).ok()
 }
 
-/// Create the PVC for each volume that does not yet exist. Existing PVCs are
-/// left untouched — their spec is largely immutable and their data must be
-/// preserved — so this is a safe get-or-create on every reconcile.
+/// Create the PVC for each volume that does not yet exist. An existing PVC
+/// keeps its spec — it is largely immutable and its data must be preserved —
+/// and only gains the gateway's admission labels if it lacks them (a PVC
+/// provisioned before the gateway required them).
 async fn ensure_pvcs(
     ctx: &Context,
     namespace: &str,
     name: &str,
-    volumes: &[crate::crd::SandboxVolume],
+    spec: &OpenShellSandboxSpec,
 ) -> Result<()> {
-    if volumes.is_empty() {
+    if spec.volumes.is_empty() {
         return Ok(());
     }
+    let workspace = workspace_of(spec);
+    let admission = volumes::admission_labels(workspace);
     let api: Api<PersistentVolumeClaim> = Api::namespaced(ctx.kube.clone(), namespace);
-    for volume in volumes {
-        let pvc = volumes::build_pvc(name, volume);
+    for volume in &spec.volumes {
         let pvc_name = volumes::pvc_name(name, volume);
-        if api.get_opt(&pvc_name).await?.is_none() {
-            info!(%name, %pvc_name, "provisioning sandbox volume");
-            api.create(&PostParams::default(), &pvc).await?;
+        match api.get_opt(&pvc_name).await? {
+            None => {
+                info!(%name, %pvc_name, "provisioning sandbox volume");
+                let pvc = volumes::build_pvc(name, workspace, volume);
+                api.create(&PostParams::default(), &pvc).await?;
+            }
+            Some(existing) if !has_labels(&existing, &admission) => {
+                info!(%name, %pvc_name, "labelling sandbox volume for gateway admission");
+                let patch = json!({ "metadata": { "labels": admission } });
+                api.patch(&pvc_name, &PatchParams::default(), &Patch::Merge(&patch))
+                    .await?;
+            }
+            Some(_) => {}
         }
     }
     Ok(())
+}
+
+fn has_labels(pvc: &PersistentVolumeClaim, wanted: &BTreeMap<String, String>) -> bool {
+    let labels = pvc.metadata.labels.as_ref();
+    wanted
+        .iter()
+        .all(|(key, value)| labels.is_some_and(|labels| labels.get(key) == Some(value)))
 }
 
 /// Delete the sandbox on the gateway before the finalizer releases the CR, and
