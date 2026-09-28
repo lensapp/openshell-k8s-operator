@@ -43,16 +43,12 @@ use crate::crd::{
 };
 use crate::error::{Error, Result};
 use crate::gateway::{
-    WorkspaceCreate, WorkspaceMemberView, WorkspacePhase as GatewayWorkspacePhase,
-    WorkspaceRole as GatewayWorkspaceRole,
+    DEFAULT_WORKSPACE, WorkspaceCreate, WorkspaceMemberView,
+    WorkspacePhase as GatewayWorkspacePhase, WorkspaceRole as GatewayWorkspaceRole, workspace_name,
 };
 
 /// Finalizer key guaranteeing gateway-side deletion before the CR is removed.
 pub const FINALIZER: &str = "openshell.lenshq.io/workspace-cleanup";
-
-/// The gateway's built-in workspace. It is created implicitly, cannot be
-/// deleted, and is the target of an empty/omitted `spec.workspace` elsewhere.
-const DEFAULT_WORKSPACE: &str = "default";
 
 /// Run the workspace controller until the process is stopped.
 pub async fn run(ctx: Arc<Context>) {
@@ -341,10 +337,7 @@ async fn count_referencing(ctx: &Context, workspace: &str) -> Result<usize> {
 /// the sandbox/provider controllers actually send (their `workspace_of`), so it
 /// deliberately does not trim — the comparison is on exactly what was sent.
 fn normalize_workspace(workspace: Option<&str>) -> &str {
-    match workspace {
-        Some(name) if !name.is_empty() => name,
-        _ => DEFAULT_WORKSPACE,
-    }
+    workspace_name(workspace.unwrap_or_default())
 }
 
 /// Map the gateway phase onto the CR's coarse phase; an unknown phase is left

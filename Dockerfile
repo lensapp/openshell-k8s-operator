@@ -3,7 +3,7 @@
 # Build both workspace binaries. The builder matches the crates' rust-version;
 # the git dependencies on NVIDIA/OpenShell are fetched at build time (pinned by
 # the committed Cargo.lock, so the build is reproducible).
-FROM rust:1.90-bookworm AS builder
+FROM rust:1.94-bookworm AS builder
 WORKDIR /build
 COPY . .
 # Cache the cargo registry and target dir across builds (BuildKit). The target

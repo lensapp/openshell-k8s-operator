@@ -28,11 +28,14 @@ Notes:
 
 Auth: gateway.bundled=false, so you bring your own gateway at
 {{ .Values.gateway.endpoint }}.
+For sandbox volumes, enable caller driver config on that gateway
+(drivers.kubernetes.allow_driver_config = true).
 {{- if eq .Values.auth.mode "bundledOidc" }}
 The bundled OIDC issuer minted the operator's admin bearer; configure your
 gateway to trust it (the operator authenticates as a User with the admin role):
 
   oidc.issuer      = {{ include "openshell-operator.issuerUrl" . }}
+  oidc.ca          = ConfigMap {{ include "openshell-operator.issuerCaConfigMapName" . }} (key: ca.crt)
   oidc.audience    = {{ .Values.auth.oidc.audience }}
   oidc.roles_claim = roles
   authz.admin_role = {{ .Values.auth.oidc.adminRole }}

@@ -1,6 +1,7 @@
 {{- if and .Values.operator.deployStandalone (eq .Values.auth.mode "bundledOidc") -}}
-# Always-on issuer: serves the discovery doc + public JWKS the gateway fetches,
-# read from the ConfigMap the mint Job published. Holds no private key.
+# Always-on issuer: serves the discovery doc + public JWKS the gateway fetches
+# over HTTPS, read from the ConfigMap the mint Job published. Holds the TLS key
+# but no token-signing key.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,6 +18,10 @@ spec:
     metadata:
       labels:
         {{- include "openshell-operator.issuerSelectorLabels" . | nindent 8 }}
+      # The mint Job re-issues the serving cert for a new issuer URL; roll the
+      # pod so it loads that cert.
+      annotations:
+        openshell.lenshq.io/issuer-url: {{ include "openshell-operator.issuerUrl" . | quote }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -32,17 +37,20 @@ spec:
           env:
             - name: ISSUER_CONFIG_DIR
               value: /etc/oidc
+            - name: ISSUER_TLS_DIR
+              value: /etc/oidc-tls
             - name: ISSUER_LISTEN
               value: 0.0.0.0:8081
             - name: RUST_LOG
               value: {{ .Values.logLevel | quote }}
           ports:
-            - name: http
+            - name: https
               containerPort: 8081
           readinessProbe:
             httpGet:
               path: /keys
-              port: http
+              port: https
+              scheme: HTTPS
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
@@ -51,10 +59,21 @@ spec:
             - name: jwks
               mountPath: /etc/oidc
               readOnly: true
+            - name: tls
+              mountPath: /etc/oidc-tls
+              readOnly: true
       volumes:
         - name: jwks
           configMap:
             name: {{ include "openshell-operator.jwksConfigMapName" . }}
+        - name: tls
+          secret:
+            secretName: {{ include "openshell-operator.issuerTlsSecretName" . }}
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
 ---
 apiVersion: v1
 kind: Service
@@ -67,7 +86,7 @@ spec:
   selector:
     {{- include "openshell-operator.issuerSelectorLabels" . | nindent 4 }}
   ports:
-    - name: http
+    - name: https
       port: 8081
-      targetPort: http
+      targetPort: https
 {{- end }}

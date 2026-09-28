@@ -1,6 +1,6 @@
 {{- if and .Values.operator.deployStandalone (eq .Values.auth.mode "bundledOidc") -}}
-# Hook RBAC for the mint Job: it creates the token Secret + JWKS ConfigMap
-# through the kube API. Scoped to this namespace and to those two verbs only.
+# Hook RBAC for the mint Job: it applies the token + TLS Secrets and the JWKS +
+# CA ConfigMaps through the kube API. Scoped to this namespace.
 # Weighted below the Job so it exists before the Job runs, and torn down after.
 apiVersion: v1
 kind: ServiceAccount
@@ -26,12 +26,12 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
-  # mint get_opts then creates the token Secret,
+  # mint reads the existing Secrets, then server-side-applies them and the
+  # ConfigMaps. SSA needs `patch`, plus `create` for the first apply when the
+  # object does not yet exist.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create"]
-  # and server-side-applies the JWKS ConfigMap. SSA needs `patch`, plus `create`
-  # for the first apply when the ConfigMap does not yet exist.
+    verbs: ["get", "create", "patch"]
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["create", "patch"]

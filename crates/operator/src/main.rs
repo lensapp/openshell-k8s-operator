@@ -23,6 +23,9 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_subscriber::fmt::layer())
         .init();
+    // Two rustls providers are compiled in (ring here, aws-lc-rs via the
+    // OpenShell crates), so pick one before the first TLS client is built.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Start the probe server first so liveness answers while the clients below
     // are still connecting. Readiness stays false until startup completes. Bind

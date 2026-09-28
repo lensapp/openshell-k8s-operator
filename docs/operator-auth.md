@@ -53,7 +53,11 @@ compute driver, and the built-in K8s-ServiceAccount authenticator only mints
   `{issuer}/.well-known/openid-configuration`, checks the doc's `issuer` matches
   config, then fetches `jwks_uri`. No static-JWKS-file option → a live JWKS
   endpoint is required.
-- **`http://` issuer works** — it's a plain `reqwest` GET, no HTTPS enforcement.
+- **The issuer must be `https://`** (since OpenShell v0.1). Discovery and JWKS
+  fetches reject plain HTTP except to a numeric loopback address behind a
+  development-only flag. The gateway trusts a private issuer CA through the
+  chart's `server.oidc.caConfigMapName`, which sets `SSL_CERT_FILE` and so
+  *replaces* its trust store — the bundle must carry public roots as well.
 - Token must be **RS256 / RSA**, header carries a **`kid`** matching a JWK in the
   set; `iss` and `aud` are validated; roles are read from a configurable claim
   path (`roles_claim`), and admin is granted when a role matches the gateway's
@@ -72,11 +76,11 @@ crates/
   operator/   # today's crate: operator + crdgen bins, lib. Small auth change only.
   issuer/     # new binary, two subcommands:
               #   mint  — one-shot, holds the private key transiently
-              #   serve — long-running, public JWKS only, cannot sign
+              #   serve — long-running, public JWKS over HTTPS, cannot sign
 ```
 
 The mint capability is confined to a short-lived Job; the always-on `serve` pod
-never holds the private key.
+never holds the token-signing key. It holds only its TLS serving key.
 
 ## Flow
 
@@ -87,18 +91,27 @@ helm install
   │     • generate RSA keypair (RS256)
   │     • sign the operator JWT: iss=<issuer-svc URL>, aud=<audience>,
   │       roles:["openshell-admin"], no expiry, header kid=K
-  │     • via the kube API, create-if-absent (idempotent — keeps the key stable
-  │       across upgrades; regenerating would invalidate the live token + JWKS):
+  │     • via the kube API, server-side apply (idempotent — a token annotated
+  │       with the current issuer URL is kept, so the key stays stable across
+  │       upgrades; a token for another issuer URL is re-minted):
   │         Secret    <rel>-operator-token   { token }
   │         ConfigMap <rel>-oidc-jwks        { openid-configuration, jwks.json (public) }
-  │     • needs a hook ServiceAccount + Role: secrets/configmaps get,create,patch
+  │     • create-if-absent a private CA + serving cert for the issuer Service;
+  │       the CA key is dropped after signing. Republish the CA every run:
+  │         Secret    <rel>-issuer-tls       { tls.crt, tls.key, ca.crt }
+  │         ConfigMap openshell-issuer-ca    { ca.crt = issuer CA + system roots }
+  │                   (<rel>-issuer-ca when gateway.bundled=false)
+  │     • needs a hook ServiceAccount + Role: secrets get,create,patch;
+  │       configmaps create,patch
   │
   ├─ issuer serve  (Deployment + Service)
-  │     • mounts the JWKS ConfigMap, serves /.well-known/openid-configuration + /keys
-  │     • public-only, no private key
+  │     • mounts the JWKS ConfigMap + TLS Secret, serves
+  │       /.well-known/openid-configuration + /keys over HTTPS
+  │     • no token-signing key
   │
   ├─ gateway (bundled subchart or BYO) configured:
-  │     oidc.issuer   = https://<issuer-svc>.<ns>.svc:PORT   (http also accepted)
+  │     oidc.issuer   = https://<issuer-svc>.<ns>.svc:PORT
+  │     oidc CA       = the issuer CA ConfigMap (copied into a BYO gateway's namespace)
   │     oidc.audience = openshell-operator
   │     oidc.roles_claim = "roles";  authz.admin_role = "openshell-admin"
   │     TLS on, no client CA  → require_client_auth=false (server-TLS only)

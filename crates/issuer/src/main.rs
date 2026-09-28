@@ -9,13 +9,15 @@
 //!   admin JWT, and publish the token `Secret` + JWKS `ConfigMap`. The private
 //!   key lives only for the life of this process and is never persisted.
 //! - `serve` — long-running: expose the discovery document and JWKS read from a
-//!   mounted `ConfigMap`. Public material only; it cannot sign.
+//!   mounted `ConfigMap`, over HTTPS. It holds the TLS key but cannot sign
+//!   tokens.
 //!
 //! Splitting the two keeps signing confined to a short-lived Job while the
 //! always-on pod holds nothing secret.
 
 mod mint;
 mod serve;
+mod tls;
 
 use anyhow::bail;
 use tracing_subscriber::EnvFilter;
@@ -27,6 +29,9 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_subscriber::fmt::layer())
         .init();
+    // Two rustls providers are compiled in (ring here, aws-lc-rs via kube), so
+    // pick one before the kube client or the TLS listener needs it.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     match std::env::args().nth(1).as_deref() {
         Some("mint") => mint::run().await,

@@ -3,5 +3,5 @@
 # lints like cognitive_complexity) drift between versions, so an unpinned newer
 # toolchain can pass locally yet fail CI. CI installs this same version.
 [toolchain]
-channel = "1.90"
+channel = "1.94"
 components = ["rustfmt", "clippy"]

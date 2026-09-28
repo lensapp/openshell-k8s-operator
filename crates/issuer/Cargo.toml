@@ -5,7 +5,7 @@
 name = "openshell-issuer"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.94"
 license = "Apache-2.0"
 description = "Static OIDC issuer that mints the operator's gateway bearer and serves its JWKS"
 repository = "https://github.com/lensapp/openshell-k8s-operator"
@@ -28,8 +28,13 @@ rand = "0.8"
 jsonwebtoken = "9"
 base64 = "0.22"
 sha2 = "0.10"
-# `serve` exposes the discovery doc + JWKS over HTTP.
+# `serve` exposes the discovery doc + JWKS over HTTPS: the gateway refuses a
+# plain-HTTP issuer. `mint` self-signs the serving cert with rcgen. Same ring
+# provider as the operator, not rustls' default aws-lc-rs.
 axum = "0.8"
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

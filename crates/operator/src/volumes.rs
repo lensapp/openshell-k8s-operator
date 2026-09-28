@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use crate::crd::SandboxVolume;
 use crate::error::{Error, Result};
+use crate::gateway::workspace_name;
 
 /// Standard `managed-by` label stamped on every provisioned PVC.
 pub const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
@@ -26,6 +27,12 @@ pub const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by";
 pub const MANAGED_BY_VALUE: &str = "openshell-operator";
 /// Label linking a provisioned PVC back to its owning sandbox (by name).
 pub const SANDBOX_LABEL: &str = "openshell.lenshq.io/sandbox";
+
+/// The gateway's default resource-admission labels. It attaches a
+/// caller-selected PVC only when the PVC carries both, the second naming the
+/// sandbox's workspace.
+const ATTACHABLE_LABEL: &str = "openshell.ai/sandbox-attachable";
+const ATTACHABLE_WORKSPACE_LABEL: &str = "openshell.ai/sandbox-attachable-workspace";
 
 /// Compute-driver key the gateway matches when selecting the `driver_config`
 /// block. This feature is inherently Kubernetes-specific (it provisions PVCs),
@@ -80,17 +87,28 @@ pub fn selector(sandbox: &str) -> String {
     format!("{SANDBOX_LABEL}={sandbox}")
 }
 
+/// Labels that approve a PVC for attachment to a sandbox in `workspace`.
+#[must_use]
+pub fn admission_labels(workspace: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (ATTACHABLE_LABEL.to_owned(), "true".to_owned()),
+        (
+            ATTACHABLE_WORKSPACE_LABEL.to_owned(),
+            workspace_name(workspace).to_owned(),
+        ),
+    ])
+}
+
 /// Build the `PersistentVolumeClaim` to provision for a volume.
 ///
 /// The claim carries no owner reference: lifecycle is managed explicitly by the
 /// finalizer per the sandbox's `volumeRetention`, so it survives the resource
 /// by default. Association is tracked via [`SANDBOX_LABEL`].
 #[must_use]
-pub fn build_pvc(sandbox: &str, volume: &SandboxVolume) -> PersistentVolumeClaim {
-    let labels = BTreeMap::from([
-        (MANAGED_BY_LABEL.to_owned(), MANAGED_BY_VALUE.to_owned()),
-        (SANDBOX_LABEL.to_owned(), sandbox.to_owned()),
-    ]);
+pub fn build_pvc(sandbox: &str, workspace: &str, volume: &SandboxVolume) -> PersistentVolumeClaim {
+    let mut labels = admission_labels(workspace);
+    labels.insert(MANAGED_BY_LABEL.to_owned(), MANAGED_BY_VALUE.to_owned());
+    labels.insert(SANDBOX_LABEL.to_owned(), sandbox.to_owned());
     PersistentVolumeClaim {
         metadata: ObjectMeta {
             name: Some(pvc_name(sandbox, volume)),
@@ -153,8 +171,8 @@ pub fn driver_config_json(sandbox: &str, volumes: &[SandboxVolume]) -> Option<Va
 #[cfg(test)]
 mod tests {
     use super::{
-        MANAGED_BY_LABEL, SANDBOX_LABEL, build_pvc, driver_config_json, pvc_name, selector,
-        validate,
+        ATTACHABLE_LABEL, ATTACHABLE_WORKSPACE_LABEL, MANAGED_BY_LABEL, SANDBOX_LABEL, build_pvc,
+        driver_config_json, pvc_name, selector, validate,
     };
     use crate::crd::SandboxVolume;
     use k8s_openapi::api::core::v1::PersistentVolumeClaimSpec;
@@ -212,7 +230,7 @@ mod tests {
     fn build_pvc_sets_name_labels_and_spec() {
         let mut vol = volume("data", "/data");
         vol.claim.storage_class_name = Some("fast".to_owned());
-        let pvc = build_pvc("box", &vol);
+        let pvc = build_pvc("box", "team", &vol);
 
         assert_eq!(pvc.metadata.name.as_deref(), Some("box-data"));
         let labels = pvc.metadata.labels.expect("labels present");
@@ -222,8 +240,26 @@ mod tests {
         );
         assert_eq!(labels.get(SANDBOX_LABEL).map(String::as_str), Some("box"));
         assert_eq!(
+            labels.get(ATTACHABLE_LABEL).map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            labels.get(ATTACHABLE_WORKSPACE_LABEL).map(String::as_str),
+            Some("team")
+        );
+        assert_eq!(
             pvc.spec.and_then(|spec| spec.storage_class_name).as_deref(),
             Some("fast")
+        );
+    }
+
+    #[test]
+    fn build_pvc_approves_the_default_workspace_when_unset() {
+        let pvc = build_pvc("box", "", &volume("data", "/data"));
+        let labels = pvc.metadata.labels.expect("labels present");
+        assert_eq!(
+            labels.get(ATTACHABLE_WORKSPACE_LABEL).map(String::as_str),
+            Some("default")
         );
     }
 

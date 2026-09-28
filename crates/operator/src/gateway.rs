@@ -14,12 +14,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use openshell_sdk::raw::AuthedGrpcClient;
+use openshell_sdk::raw::proto::datamodel::v1::WorkspaceSelector;
+use openshell_sdk::raw::proto::datamodel::v1::workspace_selector::Selection;
 use openshell_sdk::raw::proto::{
     self, AddWorkspaceMemberRequest, AttachSandboxProviderRequest, CreateProviderRequest,
     CreateSandboxRequest, CreateWorkspaceRequest, DeleteProviderRequest, DeleteSandboxRequest,
-    DeleteWorkspaceRequest, DetachSandboxProviderRequest, GetProviderRequest, GetSandboxRequest,
-    GetWorkspaceRequest, ListWorkspaceMembersRequest, RemoveWorkspaceMemberRequest,
-    UpdateConfigRequest, UpdateProviderRequest,
+    DeleteWorkspaceRequest, DeletionOutcome, DetachSandboxProviderRequest, GetProviderRequest,
+    GetSandboxRequest, GetWorkspaceRequest, ListWorkspaceMembersRequest,
+    RemoveWorkspaceMemberRequest, UpdateConfigRequest, UpdateProviderRequest,
 };
 use openshell_sdk::{
     AuthConfig, ClientConfig, OpenShellClient, Refresh, RefreshError, RefreshedToken, SandboxPhase,
@@ -468,7 +470,7 @@ impl Gateway for SdkGateway {
         match grpc
             .get_sandbox(GetSandboxRequest {
                 name: name.to_owned(),
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
             })
             .await
         {
@@ -486,24 +488,27 @@ impl Gateway for SdkGateway {
             .await?
             .delete_sandbox(DeleteSandboxRequest {
                 name: name.to_owned(),
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
+                allow_missing: true,
+                request_id: String::new(),
             })
             .await?;
-        Ok(response.into_inner().deleted)
+        Ok(removed(response.into_inner().outcome))
     }
 
     async fn attach_provider(&self, sandbox: &str, provider: &str, workspace: &str) -> Result<()> {
         self.grpc()
             .await?
             .attach_sandbox_provider(AttachSandboxProviderRequest {
-                sandbox_name: sandbox.to_owned(),
-                provider_name: provider.to_owned(),
+                sandbox: sandbox.to_owned(),
+                provider: provider.to_owned(),
                 // 0 → the gateway applies against the current resource version.
                 // The operator is the sole writer of a sandbox and may change
                 // several providers in one reconcile (each attach bumps the
                 // version), so pinning a pre-read version would self-conflict.
                 expected_resource_version: 0,
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
+                request_id: String::new(),
             })
             .await?;
         Ok(())
@@ -513,10 +518,11 @@ impl Gateway for SdkGateway {
         self.grpc()
             .await?
             .detach_sandbox_provider(DetachSandboxProviderRequest {
-                sandbox_name: sandbox.to_owned(),
-                provider_name: provider.to_owned(),
+                sandbox: sandbox.to_owned(),
+                provider: provider.to_owned(),
                 expected_resource_version: 0,
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
+                request_id: String::new(),
             })
             .await?;
         Ok(())
@@ -531,10 +537,9 @@ impl Gateway for SdkGateway {
         // Spelled out rather than `..default()` so a future proto field fails the
         // build here and gets re-checked — the gateway proto is an external
         // contract. The operator only pushes a full policy; the per-setting and
-        // merge modes are unused, and annotations/workspace stay at their empty
-        // (no-change / "default" workspace) values.
+        // merge modes are unused, and annotations stay empty (no change).
         let request = UpdateConfigRequest {
-            name: sandbox.to_owned(),
+            sandbox: sandbox.to_owned(),
             policy: Some(policy),
             setting_key: String::new(),
             setting_value: None,
@@ -545,7 +550,8 @@ impl Gateway for SdkGateway {
             // sole writer, matching attach/detach above.
             expected_resource_version: 0,
             annotations: HashMap::new(),
-            workspace: workspace.to_owned(),
+            workspace_scope: Some(workspace_scope(workspace)),
+            request_id: String::new(),
         };
         match self.grpc().await?.update_config(request).await {
             Ok(_) => Ok(()),
@@ -567,7 +573,7 @@ impl Gateway for SdkGateway {
         let existing = match grpc
             .get_provider(GetProviderRequest {
                 name: input.name.clone(),
-                workspace: input.workspace.clone(),
+                workspace_scope: Some(workspace_scope(&input.workspace)),
             })
             .await
         {
@@ -590,7 +596,7 @@ impl Gateway for SdkGateway {
             credentials: input.credentials.into_iter().collect(),
             config: input.config.into_iter().collect(),
             // Credential expiry is not modelled in v1.
-            credential_expires_at_ms: HashMap::new(),
+            credential_expiration_times: HashMap::new(),
             // Empty = the provider's type profile lives in the platform/global
             // scope. The gateway allows this for any workspace (it only rejects a
             // profile_workspace that is non-empty and mismatched), so global
@@ -606,14 +612,17 @@ impl Gateway for SdkGateway {
         if existing.is_some() {
             grpc.update_provider(UpdateProviderRequest {
                 provider: Some(provider),
-                credential_expires_at_ms: HashMap::new(),
-                workspace: input.workspace.clone(),
+                credential_expiration_times: HashMap::new(),
+                clear_credential_expiration_keys: Vec::new(),
+                workspace_scope: Some(workspace_scope(&input.workspace)),
+                request_id: String::new(),
             })
             .await?;
         } else {
             grpc.create_provider(CreateProviderRequest {
                 provider: Some(provider),
-                workspace: input.workspace.clone(),
+                workspace_scope: Some(workspace_scope(&input.workspace)),
+                request_id: String::new(),
             })
             .await?;
         }
@@ -625,29 +634,35 @@ impl Gateway for SdkGateway {
         let response = grpc
             .delete_provider(DeleteProviderRequest {
                 name: name.to_owned(),
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
+                allow_missing: true,
+                request_id: String::new(),
             })
             .await?;
-        Ok(response.into_inner().deleted)
+        Ok(removed(response.into_inner().outcome))
     }
 
     async fn list_provider_profiles(&self) -> Result<Vec<ProviderProfileView>> {
         let mut grpc = self.grpc().await?;
-        // Spelled out (not `::default()`) so a new proto field fails the build.
-        // No paging; empty workspace lists the platform/global profiles.
-        let response = grpc
-            .list_provider_profiles(proto::ListProviderProfilesRequest {
-                limit: 0,
-                offset: 0,
-                workspace: String::new(),
-            })
-            .await?;
-        Ok(response
-            .into_inner()
-            .profiles
-            .into_iter()
-            .map(provider_profile_view)
-            .collect())
+        let mut profiles = Vec::new();
+        let mut page_token = String::new();
+        // Follow the page tokens until the gateway returns none. No workspace
+        // scope lists the platform/global profiles.
+        loop {
+            let response = grpc
+                .list_provider_profiles(proto::ListProviderProfilesRequest {
+                    workspace_scope: None,
+                    page_size: 0,
+                    page_token,
+                })
+                .await?
+                .into_inner();
+            profiles.extend(response.profiles.into_iter().map(provider_profile_view));
+            if response.next_page_token.is_empty() {
+                return Ok(profiles);
+            }
+            page_token = response.next_page_token;
+        }
     }
 
     async fn configure_provider_refresh(&self, input: ConfigureRefreshInput) -> Result<()> {
@@ -659,8 +674,9 @@ impl Gateway for SdkGateway {
             material: input.plan.material.into_iter().collect(),
             secret_material_keys: input.plan.secret_material_keys,
             // The credential's own expiry is managed by the refresh loop.
-            expires_at_ms: None,
-            workspace: input.workspace,
+            expiration_time: None,
+            workspace_scope: Some(workspace_scope(&input.workspace)),
+            request_id: String::new(),
         })
         .await?;
         Ok(())
@@ -677,7 +693,7 @@ impl Gateway for SdkGateway {
         let existing_version = match grpc
             .get_provider_profile(proto::GetProviderProfileRequest {
                 id: id.clone(),
-                workspace: String::new(),
+                workspace_scope: None,
             })
             .await
         {
@@ -700,7 +716,8 @@ impl Gateway for SdkGateway {
                     profile: Some(import_item(profile)),
                     expected_resource_version: version,
                     id,
-                    workspace: String::new(),
+                    workspace_scope: None,
+                    request_id: String::new(),
                 })
                 .await?
                 .into_inner();
@@ -716,7 +733,8 @@ impl Gateway for SdkGateway {
             let response = grpc
                 .import_provider_profiles(proto::ImportProviderProfilesRequest {
                     profiles: vec![import_item(profile)],
-                    workspace: String::new(),
+                    workspace_scope: None,
+                    request_id: String::new(),
                 })
                 .await?
                 .into_inner();
@@ -734,18 +752,17 @@ impl Gateway for SdkGateway {
     }
 
     async fn delete_provider_profile(&self, id: &str) -> Result<bool> {
-        let mut grpc = self.grpc().await?;
-        match grpc
+        let response = self
+            .grpc()
+            .await?
             .delete_provider_profile(proto::DeleteProviderProfileRequest {
                 id: id.to_owned(),
-                workspace: String::new(),
+                workspace_scope: None,
+                allow_missing: true,
+                request_id: String::new(),
             })
-            .await
-        {
-            Ok(response) => Ok(response.into_inner().deleted),
-            Err(status) if status.code() == Code::NotFound => Ok(false),
-            Err(status) => Err(status.into()),
-        }
+            .await?;
+        Ok(removed(response.into_inner().outcome))
     }
 
     async fn create_workspace(&self, create: WorkspaceCreate) -> Result<WorkspaceState> {
@@ -754,6 +771,7 @@ impl Gateway for SdkGateway {
             .create_workspace(CreateWorkspaceRequest {
                 name: create.name.clone(),
                 labels: create.labels.into_iter().collect(),
+                request_id: String::new(),
             })
             .await
         {
@@ -787,44 +805,38 @@ impl Gateway for SdkGateway {
     }
 
     async fn delete_workspace(&self, name: &str) -> Result<bool> {
-        let mut grpc = self.grpc().await?;
-        match grpc
+        let response = self
+            .grpc()
+            .await?
             .delete_workspace(DeleteWorkspaceRequest {
                 name: name.to_owned(),
+                allow_missing: true,
+                request_id: String::new(),
             })
-            .await
-        {
-            Ok(response) => Ok(response.into_inner().deleted),
-            Err(status) if status.code() == Code::NotFound => Ok(false),
-            Err(status) => Err(status.into()),
-        }
+            .await?;
+        Ok(removed(response.into_inner().outcome))
     }
 
     async fn list_workspace_members(&self, workspace: &str) -> Result<Vec<WorkspaceMemberView>> {
         let mut grpc = self.grpc().await?;
         let mut members = Vec::new();
-        let mut offset = 0_u32;
-        // Page until the gateway returns nothing more, advancing by however many
-        // it actually returned. The gateway caps a single page, so a workspace
-        // with many members needs more than one request; not assuming it honours
-        // `limit` exactly means a server-side clamp can't make us miss members.
+        let mut page_token = String::new();
+        // Follow the page tokens until the gateway returns none.
         loop {
             let response = grpc
                 .list_workspace_members(ListWorkspaceMembersRequest {
-                    workspace: workspace.to_owned(),
-                    limit: MEMBER_PAGE,
-                    offset,
+                    workspace_scope: Some(workspace_scope(workspace)),
+                    page_size: 0,
+                    page_token,
                 })
                 .await?
                 .into_inner();
-            let page = response.members.len();
             members.extend(response.members.into_iter().map(member_view));
-            if page == 0 {
-                break;
+            if response.next_page_token.is_empty() {
+                return Ok(members);
             }
-            offset = offset.saturating_add(page.try_into().unwrap_or(u32::MAX));
+            page_token = response.next_page_token;
         }
-        Ok(members)
     }
 
     async fn add_workspace_member(
@@ -836,9 +848,10 @@ impl Gateway for SdkGateway {
         self.grpc()
             .await?
             .add_workspace_member(AddWorkspaceMemberRequest {
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
                 principal_subject: subject.to_owned(),
                 role: workspace_role_to_proto(role) as i32,
+                request_id: String::new(),
             })
             .await?;
         Ok(())
@@ -848,17 +861,42 @@ impl Gateway for SdkGateway {
         self.grpc()
             .await?
             .remove_workspace_member(RemoveWorkspaceMemberRequest {
-                workspace: workspace.to_owned(),
+                workspace_scope: Some(workspace_scope(workspace)),
                 principal_subject: subject.to_owned(),
+                allow_missing: false,
+                request_id: String::new(),
             })
             .await?;
         Ok(())
     }
 }
 
-/// Members requested per `list_workspace_members` page. The gateway caps a page
-/// server-side; this keeps round-trips low without assuming that cap.
-const MEMBER_PAGE: u32 = 100;
+/// The gateway's built-in workspace. It is created implicitly, cannot be
+/// deleted, and is the target of an empty/omitted `spec.workspace`.
+pub const DEFAULT_WORKSPACE: &str = "default";
+
+/// The concrete workspace a `spec.workspace` value targets. The gateway rejects
+/// an empty name, so the empty default is named.
+#[must_use]
+pub fn workspace_name(workspace: &str) -> &str {
+    if workspace.is_empty() {
+        DEFAULT_WORKSPACE
+    } else {
+        workspace
+    }
+}
+
+fn workspace_scope(workspace: &str) -> WorkspaceSelector {
+    WorkspaceSelector {
+        selection: Some(Selection::Workspace(workspace_name(workspace).to_owned())),
+    }
+}
+
+/// Whether a delete removed its target: `false` only when the gateway reports
+/// it was already absent.
+fn removed(outcome: i32) -> bool {
+    DeletionOutcome::try_from(outcome) != Ok(DeletionOutcome::AlreadyAbsent)
+}
 
 /// Error for a workspace that vanished between a create-race and its re-read.
 fn missing_workspace(name: &str) -> Error {
@@ -1072,11 +1110,17 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
             // scratch login shell, and tty stays off.
             command: Vec::new(),
             tty: false,
+            // Gateway-owned attachment identity; empty on create.
+            provider_attachment_epoch: String::new(),
         }),
         name,
         labels: HashMap::new(),
         annotations: HashMap::new(),
-        workspace,
+        workspace_scope: Some(workspace_scope(&workspace)),
+        await_main_process_attachment: false,
+        workload_template: String::new(),
+        request_id: String::new(),
+        service_exposures: Vec::new(),
     }
 }
 
