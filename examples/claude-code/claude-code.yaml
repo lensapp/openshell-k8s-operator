@@ -1,0 +1,127 @@
+# Claude Code sandbox, modelled on the OpenShell-Community `base` sandbox
+# (https://github.com/NVIDIA/OpenShell-Community/tree/main/sandboxes/base).
+#
+# An OpenShellProviderProfile imports the claude-code provider type; a credential
+# Secret feeds an OpenShellProvider of that type; an OpenShellPolicy
+# mirrors the base sandbox's filesystem/landlock/process posture and its Claude +
+# GitHub network policies; an OpenShellSandbox runs the base image and pulls both
+# together. Replace the placeholder key with a real one for an actual round-trip.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-credentials
+  namespace: openshell-system
+  annotations:
+    # Opt in to being referenced as provider credentials (same namespace only).
+    openshell.lenshq.io/allow-provider-ref: "true"
+stringData:
+  ANTHROPIC_API_KEY: sk-ant-placeholder-replace-me
+---
+# The gateway ships no built-in provider profiles; import the claude-code type
+# (copied from upstream providers/claude-code.yaml).
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellProviderProfile
+metadata:
+  name: claude-code
+spec:
+  displayName: Claude Code
+  description: Claude Code CLI
+  category: agent
+  inferenceCapable: true
+  credentials:
+    - name: api_key
+      env_vars: [ANTHROPIC_API_KEY, CLAUDE_API_KEY]
+      required: true
+      auth_style: header
+      header_name: x-api-key
+  discovery:
+    credentials: [api_key]
+  endpoints:
+    - { host: api.anthropic.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+    - { host: statsig.anthropic.com, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+    - { host: sentry.io, port: 443, protocol: rest, access: read-write, enforcement: enforce }
+  binaries: [/usr/bin/claude, /usr/local/bin/claude]
+---
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellProvider
+metadata:
+  name: anthropic
+  namespace: openshell-system
+spec:
+  type: claude-code   # imported gateway provider-profile id (exact, not an alias)
+  credentialsSecretRef:
+    name: anthropic-credentials   # keys: [] reads all keys
+---
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellPolicy
+metadata:
+  name: base
+  namespace: openshell-system
+spec:
+  # Filesystem / landlock / process posture copied from the base sandbox policy.
+  filesystem:
+    includeWorkdir: true
+    readOnly: ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"]
+    readWrite: ["/sandbox", "/tmp", "/dev/null"]
+  landlock:
+    compatibility: best_effort
+  process:
+    runAsUser: sandbox
+    runAsGroup: sandbox
+  # networkPolicies passes through opaquely to the gateway's policy parser, so it
+  # uses the gateway's native schema. Scoped to Claude Code + GitHub here.
+  networkPolicies:
+    claude_code:
+      name: claude-code
+      endpoints:
+        - { host: api.anthropic.com, port: 443, protocol: rest, enforcement: enforce, access: full, tls: terminate }
+        - { host: statsig.anthropic.com, port: 443 }
+        - { host: sentry.io, port: 443 }
+        - { host: raw.githubusercontent.com, port: 443 }
+        - { host: platform.claude.com, port: 443 }
+      binaries:
+        - { path: /usr/local/bin/claude }
+        - { path: /usr/bin/node }
+    github_ssh_over_https:
+      name: github-ssh-over-https
+      endpoints:
+        - host: github.com
+          port: 443
+          protocol: rest
+          tls: terminate
+          enforcement: enforce
+          rules:
+            - allow: { method: GET, path: "/**/info/refs*" }
+            - allow: { method: POST, path: "/**/git-upload-pack" }
+      binaries:
+        - { path: /usr/bin/git }
+    github_rest_api:
+      name: github-rest-api
+      endpoints:
+        - host: api.github.com
+          port: 443
+          protocol: rest
+          tls: terminate
+          enforcement: enforce
+          access: read-only
+      binaries:
+        - { path: /usr/local/bin/claude }
+        - { path: /usr/bin/gh }
+---
+apiVersion: openshell.lenshq.io/v1alpha1
+kind: OpenShellSandbox
+metadata:
+  name: claude-code
+  namespace: openshell-system
+spec:
+  image: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+  providers:
+    - anthropic      # the OpenShellProvider above
+  policyRef: base    # the OpenShellPolicy above, applied at creation
+  resources:
+    requests:
+      cpu: "500m"
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi

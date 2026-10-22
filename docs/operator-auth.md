@@ -146,6 +146,49 @@ behind a chart value for bare-bones dev, paired with a NetworkPolicy.
   so they need an ownerReference or a cleanup hook. The token Secret holds an
   admin credential — keep its read-RBAC tight (operator SA only).
 
+## Human access to the gateway (roles)
+
+A *person* who wants to exec into a sandbox authenticates to the gateway too.
+The gateway checks two layers: a global role from its configured roles claim
+(`roles` for the bundled issuer; `admin_role` = platform admin, `user_role` =
+user), and a per-workspace role (`admin` / `user`) from workspace membership.
+
+| Capability | Needs |
+| --- | --- |
+| create / get / delete / **exec** sandboxes, read providers | `user_role` + workspace `user` |
+| write provider credentials, change sandbox policy config | `user_role` + workspace `admin` |
+| create / delete workspaces, platform provider profiles | `admin_role` (platform admin) |
+
+Platform admin satisfies every workspace check without membership. That is why
+the operator needs it: it manages workspaces and platform provider profiles. A
+person who only wants a shell needs `user_role` and a `user` membership in the
+sandbox's workspace — `default` included — granted through
+[`OpenShellWorkspace` membership](../README.md#workspaces) or
+`openshell workspace member add`.
+
+**Dev / demo (bundled issuer).** The bundled issuer mints exactly one identity,
+the operator's platform-admin token; its signing key is never persisted, so it
+cannot mint more later. For a throwaway single-tenant cluster, reuse that token.
+It is over-privileged for a shell. It lives in the `<fullname>-token` Secret
+under the `token` key (for the README's `helm install openshell`, `<fullname>`
+is `openshell-openshell-operator`):
+
+```bash
+kubectl -n openshell-system get secret openshell-openshell-operator-token \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+**Production.** Do not use the bundled issuer for human access. The gateway
+trusts a single OIDC issuer, so run your own gateway (`gateway.bundled=false`,
+`gateway.endpoint=...`), point it at a real IdP (Keycloak, Okta, Entra), and
+set its roles claim to the claim that holds the IdP's roles. Map people to
+`openshell-user` and the operator's service identity to `openshell-admin`, and
+give the operator its IdP token with `auth.mode=byo`. Grant each person a
+workspace membership and let each person present their own bearer, so the
+gateway authenticates and audits them individually. If the gateway enforces
+scopes, a shell user also needs `sandbox:read` / `sandbox:write` (or
+`openshell:all`).
+
 ## Open follow-ups
 
 - Confirm the gateway cert-bootstrap can emit a server cert with the operator's
