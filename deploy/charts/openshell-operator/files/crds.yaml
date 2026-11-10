@@ -43,7 +43,7 @@ spec:
               annotations:
                 additionalProperties:
                   type: string
-                description: Annotations applied to the sandbox's compute-platform resources (its pod). Immutable on a running sandbox — a change recreates it.
+                description: Annotations applied to the sandbox's compute-platform resources (its pod). Each key must be in the gateway's `allowed_pod_annotations`. Immutable on a running sandbox — a change recreates it.
                 type: object
               environment:
                 additionalProperties:
@@ -67,7 +67,7 @@ spec:
               labels:
                 additionalProperties:
                   type: string
-                description: Labels applied to the sandbox's compute-platform resources (its pod). Immutable on a running sandbox — a change recreates it.
+                description: Labels applied to the sandbox's compute-platform resources (its pod). Each key must be in the gateway's `allowed_pod_labels`. Immutable on a running sandbox — a change recreates it.
                 type: object
               logLevel:
                 description: Sandbox-runtime log level exposed to processes inside the sandbox (e.g. `info`, `debug`). Empty defers to the gateway default. Immutable on a running sandbox — a change recreates it.
