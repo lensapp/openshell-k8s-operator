@@ -30,6 +30,8 @@ Auth: gateway.bundled=false, so you bring your own gateway at
 {{ .Values.gateway.endpoint }}.
 For sandbox volumes, enable caller driver config on that gateway
 (drivers.kubernetes.allow_driver_config = true).
+For sandbox labels and annotations, allowlist their keys on that gateway
+(drivers.kubernetes.allowed_pod_labels / allowed_pod_annotations).
 {{- if eq .Values.auth.mode "bundledOidc" }}
 The bundled OIDC issuer minted the operator's admin bearer; configure your
 gateway to trust it (the operator authenticates as a User with the admin role):

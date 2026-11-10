@@ -1112,6 +1112,8 @@ fn create_sandbox_request(create: SandboxCreate) -> CreateSandboxRequest {
             tty: false,
             // Gateway-owned attachment identity; empty on create.
             provider_attachment_epoch: String::new(),
+            // Not modelled by the CRD; the gateway normalizes it to Never.
+            restart_policy: proto::SandboxRestartPolicy::Unspecified.into(),
         }),
         name,
         labels: HashMap::new(),

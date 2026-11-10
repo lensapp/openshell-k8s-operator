@@ -274,6 +274,20 @@ The gateway attaches a PVC only when it carries its resource-admission labels, `
 
 `volumeRetention` governs what happens to the PVCs when the `OpenShellSandbox` itself is deleted: `Retain` (default) keeps them so the data outlives the resource, `Delete` removes them. `volumeMode: Block` is rejected — the sandbox mounts a filesystem.
 
+### Pod labels and annotations
+
+`spec.labels` and `spec.annotations` go to the sandbox pod. The gateway rejects a sandbox that sets a key it does not allow, and by default it allows none. Add the keys to the gateway allowlist. An entry is an exact key or a `<domain>/*` wildcard. Keys in `openshell.ai` and `agents.x-k8s.io` are always rejected and cannot be in the allowlist:
+
+```yaml
+openshellGateway:
+  gatewayConfig:
+    openshell.drivers.kubernetes:
+      allowed_pod_labels: ["team"]
+      allowed_pod_annotations: ["example.com/*"]
+```
+
+On your own gateway, set `allowed_pod_labels` and `allowed_pod_annotations` in `[openshell.drivers.kubernetes]`.
+
 ### Updates and recreation
 
 The gateway treats much of a sandbox's spec as immutable on a running sandbox. When you edit an **immutable** field — `image`, `environment`, `gpu`/`gpuCount`, `logLevel`, `runtimeClassName`, `resources`, `labels`, `annotations`, the volume mounts, or the resolved policy's `landlock`/`process` (from `spec.policy` or a referenced `OpenShellPolicy`) — the operator converges by **deleting and recreating the gateway sandbox**. It tracks the applied fields as a hash in `.status.appliedSpecHash`, so it recreates only on a real change (and adopts a pre-existing sandbox without recreating it). During a recreate it emits a `Normal` `Recreating` event.

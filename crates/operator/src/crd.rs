@@ -116,12 +116,14 @@ pub struct OpenShellSandboxSpec {
     pub runtime_class_name: Option<String>,
 
     /// Labels applied to the sandbox's compute-platform resources (its pod).
+    /// Each key must be in the gateway's `allowed_pod_labels`.
     /// Immutable on a running sandbox — a change recreates it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
 
     /// Annotations applied to the sandbox's compute-platform resources (its
-    /// pod). Immutable on a running sandbox — a change recreates it.
+    /// pod). Each key must be in the gateway's `allowed_pod_annotations`.
+    /// Immutable on a running sandbox — a change recreates it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotations: BTreeMap<String, String>,
 
